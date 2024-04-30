@@ -40,10 +40,20 @@ cd ~/android/lineage/21/vendor/lineage/overlay/common/frameworks/base/core/res/r
 vi config.xml
     # Edit
     <integer name="config_multiuserMaximumUsers">16</integer>
+    # Square icons?? // Old not used anymore
+    <string name="config_icon_mask" translatable="false">"M 50 0 L 50 0 L 19.2 0 C 12.4794 0 9.11905 0 6.55211 1.30792 C 4.29417 2.4584 2.4584 4.29417 1.30792 6.55211 C 0 9.11905 0 12.4794 0 19.2 L 0 80.8C 0 87.5206 0 90.8809 1.30792 93.4479 C 2.4584 95.7058 4.29417 97.5416 6.55211 98.6921 C 9.11905 100 12.4794 100 19.2 100 L 80.8 100 C 87.5206 100 90.8809 100 93.4479 98.6921 C 95.7058 97.5416 97.5416 95.7058 98.6921 93.4479 C 100 90.8809 100 87.5206 100 80.8 L 100 19.2 C 100 12.4794 100 9.11905 98.6921 6.55211 C 97.5416 4.29417 95.7058 2.4584 93.4479 1.30792 C 90.8809 0 87.5206 0 80.8 0Z"</string>
 
 # add pre-built apps to build process (see commons-addition.mk for options)
 cd ~/android/lineage/21/vendor/lineage/config/
 vi common.mk
+
+# resevered space // needs editing for apps
+cd ~/android/lineage/21/vendor/lineage/config/
+vi BoardConfigReservedSize.mk
+
+# Blue Bootanimation
+cd ~/android/lineage/21/vendor/lineage/bootanimation
+cp ~/Downloads/bootanimation.tar ./bootanimation.tar
 
 # Updater URL
 cd ~/android/lineage/21/packages/apps/Updater/app/src/main/res/values/

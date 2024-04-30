@@ -2,6 +2,14 @@
 PRODUCT_PACKAGES += \
     F-DroidPrivilegedExtension
 
+# SMS replacement
+PRODUCT_PACKAGES += \
+    QKSMS
+
+# Email
+PRODUCT_PACKAGES += \
+    K9Mail
+
 # Firefox (Browser replacement) // does not work
 PRODUCT_PACKAGES += \
     FirefoxFenix \

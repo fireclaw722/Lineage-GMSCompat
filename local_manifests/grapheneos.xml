@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+    <!-- GMS Compat -->
+	<project name="GrapheneOS/platform_packages_apps_GmsCompat" path="packages/apps/GmsCompat" remote="github" revision="14" clone-depth="1" />
+    <project name="GrapheneOS/platform_external_GmsCompatConfig" path="external/GmsCompatConfig" remote="github" revision="14" clone-depth="1" />
+    <project name="GrapheneOS/platform_external_AppCompatConfig" path="external/AppCompatConfig" remote="github" revision="14" clone-depth="1" />
+    <project name="GrapheneOS/platform_packages_apps_AppCompatConfig" path="packages/apps/AppCompatConfig" remote="github" revision="14" clone-depth="1" />
+</manifest>

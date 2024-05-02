@@ -1,37 +1,62 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-    <!-- (barbet) Google Pixel 5a & 5 Shared -->
-    <project name="LineageOS/android_device_google_barbet" path="device/google/barbet" remote="github" revision="lineage-21" />
-    <project name="LineageOS/android_kernel_google_redbull" path="kernel/google/redbull" remote="github" revision="lineage-21" />
-    <project name="LineageOS/android_device_google_redbull" path="device/google/redbull" remote="github" revision="lineage-21" />
-    <!-- (redfin) Google Pixel 5 -->
-    <project name="LineageOS/android_device_google_redfin" path="device/google/redfin" remote="github" revision="lineage-21" />
-
-    <!-- (beckham) Motorola Moto Z3 Play -->
-    <project path="device/motorola/beckham" remote="github" name="LineageOS/android_device_motorola_beckham" revision="lineage-21" />
-    <project path="kernel/motorola/msm8998" remote="github" name="LineageOS/android_kernel_motorola_msm8998" revision="lineage-21" />
-    <project path="device/motorola/msm8998-common" remote="github" name="LineageOS/android_device_motorola_msm8998-common" revision="lineage-21" />
-    <project path="external/bson" remote="github" name="LineageOS/android_external_bson" revision="lineage-21" />
-    <project path="hardware/motorola" remote="github" name="LineageOS/android_hardware_motorola" revision="lineage-21" />
-    <project path="system/qcom" remote="github" name="LineageOS/android_system_qcom" revision="lineage-21" />
-
     <!-- (bonito) Google Pixel 3a XL -->
     <project name="LineageOS/android_device_google_bonito" path="device/google/bonito" remote="github" revision="lineage-21" />
     <project name="LineageOS/android_kernel_google_msm-4.9" path="kernel/google/msm-4.9" remote="github" revision="lineage-21" />
     <project path="packages/apps/ElmyraService" remote="github" name="LineageOS/android_packages_apps_ElmyraService" revision="lineage-21.0" />
+    <!-- (sargo) Google Pixel 3a -->
+    <project name="LineageOS/android_device_google_sargo" path="device/google/sargo" remote="github" revision="lineage-21" />
 
-    <!-- (cheetah) Google Pixel 7 Pro -->
-    <project name="LineageOS/android_device_google_cheetah" path="device/google/cheetah" remote="github" revision="lineage-21" />
+    <!-- (redbull) Google Pixel 5a & 5 Shared -->
+    <project name="LineageOS/android_kernel_google_redbull" path="kernel/google/redbull" remote="github" revision="lineage-21" />
+    <project name="LineageOS/android_device_google_redbull" path="device/google/redbull" remote="github" revision="lineage-21" />
+    <!-- (barbet) Google Pixel 5a -->
+    <project name="LineageOS/android_device_google_barbet" path="device/google/barbet" remote="github" revision="lineage-21" />
+    <!-- (redfin) Google Pixel 5 -->
+    <project name="LineageOS/android_device_google_redfin" path="device/google/redfin" remote="github" revision="lineage-21" />
+
+    <!-- (raviole) Google Pixel 6 & 6 Pro Shared -->
+    <project name="LineageOS/android_device_google_raviole" path="device/google/raviole" remote="github" revision="lineage-21" />
+    <project name="LineageOS/android_device_google_gs101" path="device/google/gs101" remote="github" revision="lineage-21" />
+    <project name="LineageOS/android_device_google_gs-common" path="device/google/gs-common" remote="github" revision="lineage-21" />
+    <project name="device/google/raviole-kernel" path="device/google/raviole-kernel" remote="aosp-raviole" clone-depth="1" />
+    <!-- (raven) Google Pixel 6 Pro -->
+    <project name="LineageOS/android_device_google_raven" path="device/google/raven" remote="github" revision="lineage-21" />
+    <!-- (oriole) Google Pixel 6 -->
+    <project name="LineageOS/android_device_google_oriole" path="device/google/oriole" remote="github" revision="lineage-21" />
+    <!-- (bluejay) Google Pixel 6a -->
+    <project name="device/google/bluejay-kernel" path="device/google/bluejay-kernel" remote="aosp-bluejay" clone-depth="1" />
+    <project name="LineageOS/android_device_google_bluejay" path="device/google/bluejay" remote="github" revision="lineage-21" />
 
     <!-- (pantah) Google Pixel 7 & 7 Pro Shared -->
     <project name="LineageOS/android_device_google_pantah" path="device/google/pantah" remote="github" revision="lineage-21" />
     <project name="LineageOS/android_device_google_gs201" path="device/google/gs201" remote="github" revision="lineage-21" />
-    <project name="LineageOS/android_device_google_gs101" path="device/google/gs101" remote="github" revision="lineage-21" />
-    <project path="kernel/google/gs201/private/gs-google" remote="github" name="LineageOS/android_kernel_google_gs201" revision="lineage-21" />
-
+    <project name="LineageOS/android_kernel_google_gs201" path="kernel/google/gs201/private/gs-google" remote="github" revision="lineage-21" />
+    <project name="device/google/pantah-kernel" path="device/google/pantah-kernel" remote="aosp-pantah" clone-depth="1" />
+    <!-- (cheetah) Google Pixel 7 Pro -->
+    <project name="LineageOS/android_device_google_cheetah" path="device/google/cheetah" remote="github" revision="lineage-21" />
     <!-- (panther) Google Pixel 7 -->
     <project name="LineageOS/android_device_google_panther" path="device/google/panther" remote="github" revision="lineage-21" />
+    <!-- (lynx) Google Pixel 7a -->
+    <project name="LineageOS/android_device_google_lynx" path="device/google/lynx" remote="github" revision="lineage-21" />
+    <project name="device/google/lynx-kernel" path="device/google/lynx-kernel" remote="aosp-lynx" clone-depth="1" />
 
-    <!-- (sargo) Google Pixel 3a -->
-    <project name="LineageOS/android_device_google_sargo" path="device/google/sargo" remote="github" revision="lineage-21" />
+    <!-- (shusky) Google Pixel 8 & 8 Pro Shared -->
+    <project name="LineageOS/android_device_google_shusky" path="device/google/shusky" remote="github" revision="lineage-21" />
+    <project name="device/google/shusky-kernel" path="device/google/shusky-kernel" remote="aosp-shusky" clone-depth="1" />
+    <project name="LineageOS/android_device_google_zuma" path="device/google/zuma" remote="github" revision="lineage-21" />
+    <!-- (husky) Google Pixel 8 Pro -->
+    <project name="LineageOS/android_device_google_husky" path="device/google/husky" remote="github" revision="lineage-21" />
+    <!-- (shiba) Google Pixel 8 -->
+    <project name="LineageOS/android_device_google_shiba" path="device/google/shiba" remote="github" revision="lineage-21" />
+    <!-- (tangorpro) Google Pixel Fold -->
+    <project name="LineageOS/android_device_google_tangorpro" path="device/google/tangorpro" remote="github" revision="lineage-21" />
+    <project name="device/google/tangorpro-kernel" path="device/google/tangorpro-kernel" remote="aosp-tangorpro" clone-depth="1" />
+    <!-- (felix) Google Pixel Tablet -->
+    <project name="LineageOS/android_device_google_felix" path="device/google/felix" remote="github" revision="lineage-21" />
+    <project name="device/google/felix-kernel" path="device/google/felix-kernel" remote="aosp-felix" clone-depth="1" />
+
+    <!-- (FP4) Fairphone 4 -->
+    <project name="LineageOS/android_device_fairphone_FP4" path="device/fairphone/FP4" remote="github" revision="lineage-21" />
+    <project name="LineageOS/android_kernel_fairphone_sm7225" path="kernel/fairphone/sm7225" remote="github" revision="lineage-21" />
 </manifest>

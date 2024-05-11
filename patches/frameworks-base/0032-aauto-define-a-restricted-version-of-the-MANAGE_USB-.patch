@@ -1,0 +1,160 @@
+From 52597a0bf0262ec1a2e2f10a6934a661802b8b08 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 18 Dec 2023 14:53:20 +0200
+Subject: [PATCH 32/45] aauto: define a restricted version of the MANAGE_USB
+ permission
+
+---
+ core/res/AndroidManifest.xml                  |  4 ++
+ .../com/android/server/usb/UsbService.java    | 45 ++++++++++++++++---
+ .../server/usb/UsbUserPermissionManager.java  | 14 ++++++
+ 3 files changed, 56 insertions(+), 7 deletions(-)
+
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index ffccc735b9ed..d0658084f832 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -2673,6 +2673,10 @@
+     <permission android:name="android.permission.MANAGE_USB"
+         android:protectionLevel="signature|privileged" />
+ 
++    <!--- @hide -->
++    <permission android:name="android.permission.MANAGE_USB_ANDROID_AUTO"
++        android:protectionLevel="internal" />
++
+     <!-- @SystemApi Allows an application to manage Android Debug Bridge settings.
+          <p>Not for use by third-party applications.
+          @hide -->
+diff --git a/services/usb/java/com/android/server/usb/UsbService.java b/services/usb/java/com/android/server/usb/UsbService.java
+index fb13b33a30ce..6bcc39e663a0 100644
+--- a/services/usb/java/com/android/server/usb/UsbService.java
++++ b/services/usb/java/com/android/server/usb/UsbService.java
+@@ -270,6 +270,19 @@ public class UsbService extends IUsbManager.Stub {
+         }
+     }
+ 
++    private void enforceCallingOrSelfManageUsborAndroidAuto(String message) {
++        try {
++            mContext.enforceCallingOrSelfPermission(android.Manifest.permission.MANAGE_USB, message);
++        } catch (SecurityException se) {
++            String aautoPerm = android.Manifest.permission.MANAGE_USB_ANDROID_AUTO;
++            if (mContext.checkCallingPermission(aautoPerm) == PackageManager.PERMISSION_GRANTED) {
++                return;
++            }
++
++            throw se;
++        }
++    }
++
+     /* Returns a list of all currently attached USB devices (host mdoe) */
+     @Override
+     public void getDeviceList(Bundle devices) {
+@@ -629,7 +642,11 @@ public class UsbService extends IUsbManager.Stub {
+         }
+     }
+ 
+-    @android.annotation.EnforcePermission(android.Manifest.permission.MANAGE_USB)
++    @android.annotation.EnforcePermission(anyOf = {
++            android.Manifest.permission.MANAGE_USB,
++            /** @see android.hardware.usb.UsbManager#setCurrentFunctions # */
++            android.Manifest.permission.MANAGE_USB_ANDROID_AUTO,
++    })
+     @Override
+     public void setCurrentFunctions(long functions, int operationId) {
+         setCurrentFunctions_enforcePermission();
+@@ -648,7 +665,11 @@ public class UsbService extends IUsbManager.Stub {
+         return (getCurrentFunctions() & UsbManager.usbFunctionsFromString(function)) != 0;
+     }
+ 
+-    @android.annotation.EnforcePermission(android.Manifest.permission.MANAGE_USB)
++    @android.annotation.EnforcePermission(anyOf = {
++            android.Manifest.permission.MANAGE_USB,
++            /** @see android.hardware.usb.UsbManager#getCurrentFunctions */
++            android.Manifest.permission.MANAGE_USB_ANDROID_AUTO,
++    })
+     @Override
+     public long getCurrentFunctions() {
+         getCurrentFunctions_enforcePermission();
+@@ -702,7 +723,11 @@ public class UsbService extends IUsbManager.Stub {
+         }
+     }
+ 
+-    @android.annotation.EnforcePermission(android.Manifest.permission.MANAGE_USB)
++    @android.annotation.EnforcePermission(anyOf = {
++            android.Manifest.permission.MANAGE_USB,
++            /** @see android.hardware.usb.UsbManager#resetUsbGadget */
++            android.Manifest.permission.MANAGE_USB_ANDROID_AUTO,
++    })
+     @Override
+     public void resetUsbGadget() {
+         resetUsbGadget_enforcePermission();
+@@ -723,7 +748,8 @@ public class UsbService extends IUsbManager.Stub {
+                 + operationId);
+         Objects.requireNonNull(callback, "resetUsbPort: callback must not be null. opId:"
+                 + operationId);
+-        mContext.enforceCallingOrSelfPermission(android.Manifest.permission.MANAGE_USB, null);
++        /** @see android.hardware.usb.UsbManager#resetUsbPort */
++        enforceCallingOrSelfManageUsborAndroidAuto(null);
+ 
+         final long ident = Binder.clearCallingIdentity();
+ 
+@@ -742,7 +768,10 @@ public class UsbService extends IUsbManager.Stub {
+         }
+     }
+ 
+-    @android.annotation.EnforcePermission(android.Manifest.permission.MANAGE_USB)
++    @android.annotation.EnforcePermission(anyOf = {
++            android.Manifest.permission.MANAGE_USB,
++            android.Manifest.permission.MANAGE_USB_ANDROID_AUTO,
++    })
+     @Override
+     public List<ParcelableUsbPort> getPorts() {
+         getPorts_enforcePermission();
+@@ -771,7 +800,8 @@ public class UsbService extends IUsbManager.Stub {
+     @Override
+     public UsbPortStatus getPortStatus(String portId) {
+         Objects.requireNonNull(portId, "portId must not be null");
+-        mContext.enforceCallingOrSelfPermission(android.Manifest.permission.MANAGE_USB, null);
++        /** @see android.hardware.usb.UsbManager#getPortStatus  */
++        enforceCallingOrSelfManageUsborAndroidAuto(null);
+ 
+         final long ident = Binder.clearCallingIdentity();
+         try {
+@@ -785,7 +815,8 @@ public class UsbService extends IUsbManager.Stub {
+     public void setPortRoles(String portId, int powerRole, int dataRole) {
+         Objects.requireNonNull(portId, "portId must not be null");
+         UsbPort.checkRoles(powerRole, dataRole);
+-        mContext.enforceCallingOrSelfPermission(android.Manifest.permission.MANAGE_USB, null);
++        /** @see android.hardware.usb.UsbManager#setPortRoles */
++        enforceCallingOrSelfManageUsborAndroidAuto(null);
+ 
+         final long ident = Binder.clearCallingIdentity();
+         try {
+diff --git a/services/usb/java/com/android/server/usb/UsbUserPermissionManager.java b/services/usb/java/com/android/server/usb/UsbUserPermissionManager.java
+index f39cb3934d9a..85df11b161a1 100644
+--- a/services/usb/java/com/android/server/usb/UsbUserPermissionManager.java
++++ b/services/usb/java/com/android/server/usb/UsbUserPermissionManager.java
+@@ -255,6 +255,20 @@ class UsbUserPermissionManager {
+                          == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                 return true;
+             }
++
++            // keep in sync with res/xml/car_usb_accessory_filter.xml inside Android Auto
++            if ("Android".equals(accessory.getManufacturer())) {
++                switch (accessory.getModel()) {
++                    case "Android", "Android Auto", "Android Open Automotive Protocol" -> {
++                        String perm = android.Manifest.permission.MANAGE_USB_ANDROID_AUTO;
++                        if (mContext.checkPermission(perm, pid, uid) == PackageManager.PERMISSION_GRANTED) {
++                            Slog.d(TAG, "allowed Android Auto access to " + accessory);
++                            return true;
++                        }
++                    }
++                }
++            }
++
+             AccessoryFilter filter = new AccessoryFilter(accessory);
+             SparseBooleanArray permissionsForAccessory =
+                     mAccessoryPersistentPermissionMap.get(filter);
+-- 
+2.34.1
+

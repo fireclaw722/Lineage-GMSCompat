@@ -1,0 +1,47 @@
+From c563c82b678c12eb456f1143f7660e5eb7a82d03 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Wed, 20 Dec 2023 12:23:08 +0200
+Subject: [PATCH 36/45] aauto: support using aauto USB accessory activity as a
+ default activity
+
+---
+ .../usb/UsbProfileGroupSettingsManager.java       | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/services/usb/java/com/android/server/usb/UsbProfileGroupSettingsManager.java b/services/usb/java/com/android/server/usb/UsbProfileGroupSettingsManager.java
+index f91666081e82..ee447d7c1b40 100644
+--- a/services/usb/java/com/android/server/usb/UsbProfileGroupSettingsManager.java
++++ b/services/usb/java/com/android/server/usb/UsbProfileGroupSettingsManager.java
+@@ -62,6 +62,7 @@ import com.android.internal.util.XmlUtils;
+ import com.android.internal.util.dump.DualDumpOutputStream;
+ import com.android.modules.utils.TypedXmlPullParser;
+ import com.android.modules.utils.TypedXmlSerializer;
++import com.android.server.pm.ext.AndroidAutoHooks;
+ import com.android.server.utils.EventLogger;
+ 
+ import libcore.io.IoUtils;
+@@ -1076,10 +1077,18 @@ class UsbProfileGroupSettingsManager {
+                 if (mDisablePermissionDialogs) {
+                     return activityInfo;
+                 }
++
++                ApplicationInfo ai = activityInfo.applicationInfo;
++                if (ai == null) {
++                    return null;
++                }
++
+                 // System apps are considered default unless there are other matches
+-                if (activityInfo.applicationInfo != null
+-                        && (activityInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM)
+-                                != 0) {
++                if ((ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
++                    return activityInfo;
++                }
++
++                if (AndroidAutoHooks.isAndroidAutoWithGrantedBasePrivPerms(ai.packageName, UserHandle.getUserId(ai.uid))) {
+                     return activityInfo;
+                 }
+             }
+-- 
+2.34.1
+

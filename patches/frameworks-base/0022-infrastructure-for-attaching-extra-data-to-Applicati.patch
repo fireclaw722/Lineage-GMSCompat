@@ -1,0 +1,236 @@
+From 1e8da9f300fec701f7cde1e46d422ca9b40a92ae Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 27 Nov 2023 20:40:28 +0200
+Subject: [PATCH 22/45] infrastructure for attaching extra data to
+ ApplicationInfo objects
+
+---
+ core/api/system-current.txt                   | 13 +++
+ .../android/content/pm/ApplicationInfo.java   | 17 ++++
+ core/java/android/ext/AppInfoExt.java         | 80 +++++++++++++++++++
+ .../internal/pm/parsing/pkg/PackageImpl.java  |  1 +
+ .../com/android/server/pm/ext/PackageExt.java | 15 ++++
+ 5 files changed, 126 insertions(+)
+ create mode 100644 core/java/android/ext/AppInfoExt.java
+
+diff --git a/core/api/system-current.txt b/core/api/system-current.txt
+index 2848bdd3e03f..ffcb9d41bb6f 100644
+--- a/core/api/system-current.txt
++++ b/core/api/system-current.txt
+@@ -3747,6 +3747,7 @@ package android.content.om {
+ package android.content.pm {
+ 
+   public class ApplicationInfo extends android.content.pm.PackageItemInfo implements android.os.Parcelable {
++    method @NonNull public android.ext.AppInfoExt ext();
+     method @RequiresPermission(android.Manifest.permission.DELETE_PACKAGES) public boolean hasFragileUserData();
+     method public boolean isEncryptionAware();
+     method public boolean isInstantApp();
+@@ -4359,6 +4360,18 @@ package android.debug {
+ 
+ package android.ext {
+ 
++  public final class AppInfoExt implements android.os.Parcelable {
++    ctor public AppInfoExt(int, int, long);
++    method public int describeContents();
++    method public int getPackageId();
++    method public boolean hasCompatChange(int);
++    method public boolean hasCompatConfig();
++    method public boolean hasFlag(int);
++    method public void writeToParcel(@NonNull android.os.Parcel, int);
++    field @NonNull public static final android.os.Parcelable.Creator<android.ext.AppInfoExt> CREATOR;
++    field public static final int FLAG_HAS_GMSCORE_CLIENT_LIBRARY = 0; // 0x0
++  }
++
+   public interface PackageId {
+     field public static final int ANDROID_AUTO = 10; // 0xa
+     field public static final String ANDROID_AUTO_NAME = "com.google.android.projection.gearhead";
+diff --git a/core/java/android/content/pm/ApplicationInfo.java b/core/java/android/content/pm/ApplicationInfo.java
+index 3713380485ea..df8e507bfe5c 100644
+--- a/core/java/android/content/pm/ApplicationInfo.java
++++ b/core/java/android/content/pm/ApplicationInfo.java
+@@ -30,6 +30,7 @@ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.content.pm.PackageManager.NameNotFoundException;
+ import android.content.res.Resources;
++import android.ext.AppInfoExt;
+ import android.graphics.drawable.Drawable;
+ import android.os.Build;
+ import android.os.Environment;
+@@ -1918,6 +1919,7 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
+ 
+     public ApplicationInfo(ApplicationInfo orig) {
+         super(orig);
++        ext = orig.ext;
+         taskAffinity = orig.taskAffinity;
+         permission = orig.permission;
+         mKnownActivityEmbeddingCerts = orig.mKnownActivityEmbeddingCerts;
+@@ -2007,6 +2009,7 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
+             return;
+         }
+         super.writeToParcel(dest, parcelableFlags);
++        ext.writeToParcel(dest, parcelableFlags);
+         dest.writeString8(taskAffinity);
+         dest.writeString8(permission);
+         dest.writeString8(processName);
+@@ -2111,6 +2114,7 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
+     @SuppressWarnings("unchecked")
+     private ApplicationInfo(Parcel source) {
+         super(source);
++        ext = AppInfoExt.CREATOR.createFromParcel(source);
+         taskAffinity = source.readString8();
+         permission = source.readString8();
+         processName = source.readString8();
+@@ -2850,4 +2854,17 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
+             privateFlagsExt &= ~PRIVATE_FLAG_EXT_ENABLE_ON_BACK_INVOKED_CALLBACK;
+         }
+     }
++
++    private AppInfoExt ext = AppInfoExt.DEFAULT;
++
++    /** @hide */
++    public void setExt(AppInfoExt ext) {
++        this.ext = ext;
++    }
++
++    /** @hide */
++    @SystemApi
++    public @NonNull AppInfoExt ext() {
++        return ext;
++    }
+ }
+diff --git a/core/java/android/ext/AppInfoExt.java b/core/java/android/ext/AppInfoExt.java
+new file mode 100644
+index 000000000000..4807f5d3db6c
+--- /dev/null
++++ b/core/java/android/ext/AppInfoExt.java
+@@ -0,0 +1,80 @@
++package android.ext;
++
++import android.annotation.NonNull;
++import android.annotation.SystemApi;
++import android.os.Parcel;
++import android.os.Parcelable;
++
++/** @hide */
++@SystemApi
++public final class AppInfoExt implements Parcelable {
++    /** @hide */
++    public static final AppInfoExt DEFAULT = new AppInfoExt(PackageId.UNKNOWN, 0, 0L);
++
++    private final int packageId;
++    private final int flags;
++
++    /** @hide */
++    public static final long HAS_COMPAT_CHANGES = 1L << 63;
++    private final long compatChanges;
++
++    public AppInfoExt(int packageId, int flags, long compatChanges) {
++        this.packageId = packageId;
++        this.flags = flags;
++        this.compatChanges = compatChanges;
++    }
++
++    /**
++     * One of {@link android.ext.PackageId} int constants.
++     */
++    public int getPackageId() {
++        return packageId;
++    }
++
++    public boolean hasFlag(int flag) {
++        return (flags & (1 << flag)) != 0;
++    }
++
++    public boolean hasCompatConfig() {
++        return (compatChanges & HAS_COMPAT_CHANGES) != 0;
++    }
++
++    public boolean hasCompatChange(int flag) {
++        long mask = (1L << flag) | HAS_COMPAT_CHANGES;
++        return (compatChanges & mask) == mask;
++    }
++
++    @Override
++    public int describeContents() {
++        return 0;
++    }
++
++    @Override
++    public void writeToParcel(@NonNull Parcel dest, int parcelFlags) {
++        boolean def = this == DEFAULT;
++        dest.writeBoolean(def);
++        if (def) {
++            return;
++        }
++
++        dest.writeInt(packageId);
++        dest.writeInt(flags);
++        dest.writeLong(compatChanges);
++    }
++
++    @NonNull
++    public static final Creator<AppInfoExt> CREATOR = new Creator<>() {
++        @Override
++        public AppInfoExt createFromParcel(@NonNull Parcel p) {
++            if (p.readBoolean()) {
++                return DEFAULT;
++            }
++            return new AppInfoExt(p.readInt(), p.readInt(), p.readLong());
++        }
++
++        @Override
++        public AppInfoExt[] newArray(int size) {
++            return new AppInfoExt[size];
++        }
++    };
++}
+diff --git a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+index c5e6dee6941f..3be7ec3e92b5 100644
+--- a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
++++ b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+@@ -2570,6 +2570,7 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+ 
+     public ApplicationInfo toAppInfoWithoutStateWithoutFlags() {
+         ApplicationInfo appInfo = new ApplicationInfo();
++        appInfo.setExt(ext.toAppInfoExt(this));
+ 
+         // Lines that are commented below are state related and should not be assigned here.
+         // They are left in as placeholders, since there is no good backwards compatible way to
+diff --git a/services/core/java/com/android/server/pm/ext/PackageExt.java b/services/core/java/com/android/server/pm/ext/PackageExt.java
+index 41fe7dd45db4..3a848d23f4bf 100644
+--- a/services/core/java/com/android/server/pm/ext/PackageExt.java
++++ b/services/core/java/com/android/server/pm/ext/PackageExt.java
+@@ -1,8 +1,10 @@
+ package com.android.server.pm.ext;
+ 
++import android.ext.AppInfoExt;
+ import android.ext.PackageId;
+ import android.os.Parcel;
+ 
++import com.android.server.os.nano.AppCompatProtos;
+ import com.android.server.pm.parsing.pkg.PackageImpl;
+ 
+ public class PackageExt {
+@@ -20,6 +22,19 @@ public class PackageExt {
+         return packageId;
+     }
+ 
++    public AppInfoExt toAppInfoExt(PackageImpl pkg) {
++        AppCompatProtos.CompatConfig compatConfig = pkg.getAppCompatConfig();
++
++        if (this == DEFAULT && compatConfig == null) {
++            return AppInfoExt.DEFAULT;
++        }
++
++        long compatChanges = compatConfig != null ?
++                compatConfig.compatChanges | AppInfoExt.HAS_COMPAT_CHANGES : 0L;
++
++        return new AppInfoExt(packageId, flags, compatChanges);
++    }
++
+     public void writeToParcel(Parcel dest) {
+         boolean def = this == DEFAULT;
+         dest.writeBoolean(def);
+-- 
+2.34.1
+

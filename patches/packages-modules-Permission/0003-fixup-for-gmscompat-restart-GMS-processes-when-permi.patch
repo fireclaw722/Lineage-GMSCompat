@@ -1,0 +1,27 @@
+From 56afa41a0a8aaaa816e070b67e2b6e83fa9e1444 Mon Sep 17 00:00:00 2001
+From: Builder <admin@ceruleanfire.com>
+Date: Tue, 7 May 2024 01:26:57 +0000
+Subject: [PATCH 3/3] fixup for gmscompat: restart GMS processes when
+ permission gets granted
+
+Change-Id: I4e7a477a1e50b6a51e5a803582993de6f69f6b40
+---
+ .../permissioncontroller/permission/utils/KotlinUtils.kt        | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/PermissionController/src/com/android/permissioncontroller/permission/utils/KotlinUtils.kt b/PermissionController/src/com/android/permissioncontroller/permission/utils/KotlinUtils.kt
+index 9d1e90aadc..d2bff0d988 100644
+--- a/PermissionController/src/com/android/permissioncontroller/permission/utils/KotlinUtils.kt
++++ b/PermissionController/src/com/android/permissioncontroller/permission/utils/KotlinUtils.kt
+@@ -1075,7 +1075,7 @@ object KotlinUtils {
+                 pkgInfo.packageName != "com.google.android.googlequicksearchbox"
+                 // Play Store asks for POST_NOTIFICATIONS on first launch
+                 && perm.name != POST_NOTIFICATIONS
+-                && perm.name != Manifest.permission.OTHER_SENSORS
++                //&& perm.name != Manifest.permission.OTHER_SENSORS
+             ) {
+                 shouldKill = true
+             }
+-- 
+2.34.1
+

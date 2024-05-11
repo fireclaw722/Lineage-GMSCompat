@@ -1,0 +1,377 @@
+From e5fbf51a2c79b68ca800952372045f12faa7b034 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Tue, 5 Mar 2024 18:19:49 +0200
+Subject: [PATCH 27/44] 14 QPR2: adjust Package{Ext,Hooks,ParsingHooks}
+
+---
+ .../pm/parsing/pkg/PackageExtIface.java       |  8 ++++
+ .../internal/pm/parsing/pkg/PackageImpl.java  | 21 ++++++-----
+ .../pm/pkg/parsing}/PackageParsingHooks.java  | 13 +++----
+ .../pm/pkg/parsing/ParsingPackage.java        |  5 ++-
+ .../pm/pkg/parsing/ParsingPackageUtils.java   | 37 +++++++++++++++----
+ .../android/server/pm/pkg/AndroidPackage.java |  3 +-
+ .../com/android/server/pm/ext/PackageExt.java | 17 +++++++--
+ .../android/server/pm/ext/PackageExtInit.java | 10 ++---
+ .../android/server/pm/ext/PackageHooks.java   |  2 +-
+ .../server/pm/parsing/PackageParser2.java     |  9 +++++
+ 10 files changed, 90 insertions(+), 35 deletions(-)
+ create mode 100644 core/java/com/android/internal/pm/parsing/pkg/PackageExtIface.java
+ rename {services/core/java/com/android/server/pm/ext => core/java/com/android/internal/pm/pkg/parsing}/PackageParsingHooks.java (81%)
+
+diff --git a/core/java/com/android/internal/pm/parsing/pkg/PackageExtIface.java b/core/java/com/android/internal/pm/parsing/pkg/PackageExtIface.java
+new file mode 100644
+index 000000000000..c09bd69b01d6
+--- /dev/null
++++ b/core/java/com/android/internal/pm/parsing/pkg/PackageExtIface.java
+@@ -0,0 +1,8 @@
++package com.android.internal.pm.parsing.pkg;
++
++import android.ext.AppInfoExt;
++
++/** @hide */
++public interface PackageExtIface {
++    AppInfoExt toAppInfoExt(PackageImpl pkg);
++}
+diff --git a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+index 29db3420f39c..7c25b9bb8204 100644
+--- a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
++++ b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+@@ -77,6 +77,7 @@ import com.android.internal.pm.pkg.component.ParsedService;
+ import com.android.internal.pm.pkg.component.ParsedServiceImpl;
+ import com.android.internal.pm.pkg.component.ParsedUsesPermission;
+ import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
++import com.android.internal.pm.pkg.parsing.PackageParsingHooks;
+ import com.android.internal.pm.pkg.parsing.ParsingPackage;
+ import com.android.internal.pm.pkg.parsing.ParsingPackageHidden;
+ import com.android.internal.pm.pkg.parsing.ParsingPackageUtils;
+@@ -99,8 +100,10 @@ import java.util.Collections;
+ import java.util.Comparator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Objects;
+ import java.util.Set;
+ import java.util.UUID;
++import java.util.function.Function;
+ 
+ /**
+  * Extensions to {@link PackageImpl} including fields/state contained in the system server
+@@ -3250,7 +3253,6 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+         dest.writeInt(this.uid);
+         dest.writeLong(this.mBooleans);
+         dest.writeLong(this.mBooleans2);
+-        this.ext.writeToParcel(dest);
+     }
+ 
+     public PackageImpl(Parcel in) {
+@@ -3415,8 +3417,6 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+         assignDerivedFields();
+         assignDerivedFields2();
+ 
+-        this.ext = com.android.server.pm.ext.PackageExt.createFromParcel(this, in);
+-
+         // Do not call makeImmutable here as cached parsing will need
+         // to mutate this instance before it's finalized.
+     }
+@@ -3802,28 +3802,31 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+         gosPackageStateCachedDerivedFlags = value;
+     }
+ 
+-    private com.android.server.pm.ext.PackageParsingHooks packageParsingHooks;
++    private PackageParsingHooks packageParsingHooks;
++
++    public static Function<String, PackageParsingHooks> packageParsingHooksSupplier;
+ 
+     @Override
+     public void initPackageParsingHooks() {
+-        packageParsingHooks = com.android.server.pm.ext.PackageHooksRegistry.getParsingHooks(getPackageName());
++        var supplier = packageParsingHooksSupplier;
++        packageParsingHooks = supplier != null ? supplier.apply(getPackageName()) : PackageParsingHooks.DEFAULT;
+     }
+ 
+     @Override
+-    public com.android.server.pm.ext.PackageParsingHooks getPackageParsingHooks() {
++    public PackageParsingHooks getPackageParsingHooks() {
+         return packageParsingHooks;
+     }
+ 
+-    private com.android.server.pm.ext.PackageExt ext = com.android.server.pm.ext.PackageExt.DEFAULT;
++    private PackageExtIface ext;
+ 
+     @Override
+-    public void setPackageExt(@Nullable com.android.server.pm.ext.PackageExt ext) {
++    public void setPackageExt(@Nullable PackageExtIface ext) {
+         this.ext = ext;
+     }
+ 
+     @Nullable
+     @Override
+-    public com.android.server.pm.ext.PackageExt ext() {
++    public PackageExtIface ext() {
+         return ext;
+     }
+ 
+diff --git a/services/core/java/com/android/server/pm/ext/PackageParsingHooks.java b/core/java/com/android/internal/pm/pkg/parsing/PackageParsingHooks.java
+similarity index 81%
+rename from services/core/java/com/android/server/pm/ext/PackageParsingHooks.java
+rename to core/java/com/android/internal/pm/pkg/parsing/PackageParsingHooks.java
+index ca0565f920d0..7dc3aa974cbe 100644
+--- a/services/core/java/com/android/server/pm/ext/PackageParsingHooks.java
++++ b/core/java/com/android/internal/pm/pkg/parsing/PackageParsingHooks.java
+@@ -1,14 +1,13 @@
+-package com.android.server.pm.ext;
++package com.android.internal.pm.pkg.parsing;
+ 
+ import android.annotation.Nullable;
+ import android.content.pm.PackageManager;
+ 
+-import com.android.server.pm.pkg.component.ParsedPermission;
+-import com.android.server.pm.pkg.component.ParsedService;
+-import com.android.server.pm.pkg.component.ParsedServiceImpl;
+-import com.android.server.pm.pkg.component.ParsedUsesPermission;
+-import com.android.server.pm.pkg.component.ParsedUsesPermissionImpl;
+-import com.android.server.pm.pkg.parsing.ParsingPackage;
++import com.android.internal.pm.pkg.component.ParsedPermission;
++import com.android.internal.pm.pkg.component.ParsedService;
++import com.android.internal.pm.pkg.component.ParsedServiceImpl;
++import com.android.internal.pm.pkg.component.ParsedUsesPermission;
++import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+diff --git a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
+index 95475ab0b241..aeb338280ba9 100644
+--- a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
++++ b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
+@@ -32,6 +32,7 @@ import android.util.SparseArray;
+ import android.util.SparseIntArray;
+ 
+ import com.android.internal.R;
++import com.android.internal.pm.parsing.pkg.PackageExtIface;
+ import com.android.internal.pm.parsing.pkg.ParsedPackage;
+ import com.android.internal.pm.pkg.component.ParsedActivity;
+ import com.android.internal.pm.pkg.component.ParsedApexSystemService;
+@@ -545,7 +546,7 @@ public interface ParsingPackage {
+ 
+     void initPackageParsingHooks();
+ 
+-    com.android.server.pm.ext.PackageParsingHooks getPackageParsingHooks();
++    PackageParsingHooks getPackageParsingHooks();
+ 
+-    void setPackageExt(@Nullable com.android.server.pm.ext.PackageExt ext);
++    void setPackageExt(@Nullable PackageExtIface ext);
+ }
+diff --git a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
+index c4e5a21c08b6..8004c71a70a4 100644
+--- a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
++++ b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
+@@ -142,6 +142,7 @@ import java.util.Map;
+ import java.util.Objects;
+ import java.util.Set;
+ import java.util.StringTokenizer;
++import java.util.function.Function;
+ 
+ /**
+  * TODO(b/135203078): Differentiate between parse_ methods and some add_ method for whether it
+@@ -633,13 +634,19 @@ public class ParsingPackageUtils {
+ 
+             pkg.setVolumeUuid(volumeUuid);
+ 
+-            var pkgExtInit = new com.android.server.pm.ext.PackageExtInit(input, pkg,
+-                    (flags & PARSE_IS_SYSTEM_DIR) != 0);
+-            pkgExtInit.run();
++            PackageExtInitIface pkgExtInit = null;
++            PackageExtInitSupplier pkgExtInitSupplier = packageExtInitSupplier;
++            if (pkgExtInitSupplier != null) {
++                pkgExtInit = pkgExtInitSupplier.invoke(input, pkg, (flags & PARSE_IS_SYSTEM_DIR) != 0);
++                if (pkgExtInit != null) {
++                    pkgExtInit.run();
++                }
++            }
+ 
+             if ((flags & PARSE_COLLECT_CERTIFICATES) != 0) {
+                 // skip reparsing certificates if they were already parsed by PackageExtInit
+-                ParseResult<SigningDetails> ret = pkgExtInit.getSigningDetailsParseResult();
++                ParseResult<SigningDetails> ret = pkgExtInit != null ?
++                        pkgExtInit.getSigningDetailsParseResult() : null;
+                 if (ret == null) {
+                     ret = parseSigningDetails(input, pkg);
+                 }
+@@ -658,6 +665,18 @@ public class ParsingPackageUtils {
+         }
+     }
+ 
++    public interface PackageExtInitSupplier {
++        PackageExtInitIface invoke(ParseInput input, ParsingPackage pkg, boolean isSystem);
++    }
++
++    @Nullable
++    public static PackageExtInitSupplier packageExtInitSupplier;
++
++    public interface PackageExtInitIface {
++        void run();
++        ParseResult<SigningDetails> getSigningDetailsParseResult();
++    }
++
+     public static ParseResult<SigningDetails> parseSigningDetails(ParseInput input, ParsingPackage pkg) {
+         return getSigningDetails(input, pkg, false /*skipVerify*/);
+     }
+@@ -2351,9 +2370,11 @@ public class ParsingPackageUtils {
+             }
+         }
+ 
+-        ParsedService gmsCompatClientSvc = com.android.server.pm.ext.GmsCompatPkgParsingHooks.maybeCreateClientService(pkg);
+-        if (gmsCompatClientSvc != null) {
+-            pkg.addService(gmsCompatClientSvc);
++        if (gmsCompatClientServiceSupplier != null) {
++            ParsedService gmsCompatClientSvc = gmsCompatClientServiceSupplier.apply(pkg);
++            if (gmsCompatClientSvc != null) {
++                pkg.addService(gmsCompatClientSvc);
++            }
+         }
+ 
+         if (hasServiceOrder) {
+@@ -2365,6 +2386,8 @@ public class ParsingPackageUtils {
+         return input.success(pkg);
+     }
+ 
++    public static Function<ParsingPackage, ParsedService> gmsCompatClientServiceSupplier;
++
+     // Must be run after the entire {@link ApplicationInfo} has been fully processed and after
+     // every activity info has had a chance to set it from its attributes.
+     private void afterParseBaseApplication(ParsingPackage pkg) {
+diff --git a/core/java/com/android/server/pm/pkg/AndroidPackage.java b/core/java/com/android/server/pm/pkg/AndroidPackage.java
+index 88b18124f0d7..f322fa62608b 100644
+--- a/core/java/com/android/server/pm/pkg/AndroidPackage.java
++++ b/core/java/com/android/server/pm/pkg/AndroidPackage.java
+@@ -47,6 +47,7 @@ import android.util.SparseArray;
+ import android.util.SparseIntArray;
+ 
+ import com.android.internal.R;
++import com.android.internal.pm.parsing.pkg.PackageExtIface;
+ import com.android.internal.pm.pkg.component.ParsedActivity;
+ import com.android.internal.pm.pkg.component.ParsedApexSystemService;
+ import com.android.internal.pm.pkg.component.ParsedAttribution;
+@@ -1503,5 +1504,5 @@ public interface AndroidPackage {
+ 
+     /** @hide */
+     @Immutable.Ignore
+-    com.android.server.pm.ext.PackageExt ext();
++    PackageExtIface ext();
+ }
+diff --git a/services/core/java/com/android/server/pm/ext/PackageExt.java b/services/core/java/com/android/server/pm/ext/PackageExt.java
+index 2a39170b5021..2540a5148f44 100644
+--- a/services/core/java/com/android/server/pm/ext/PackageExt.java
++++ b/services/core/java/com/android/server/pm/ext/PackageExt.java
+@@ -4,10 +4,13 @@ import android.ext.AppInfoExt;
+ import android.ext.PackageId;
+ import android.os.Parcel;
+ 
++import com.android.internal.pm.parsing.pkg.PackageExtIface;
++import com.android.internal.pm.parsing.pkg.PackageImpl;
++import com.android.server.ext.AppCompatConf;
+ import com.android.server.os.nano.AppCompatProtos;
+-import com.android.server.pm.parsing.pkg.PackageImpl;
++import com.android.server.pm.pkg.AndroidPackage;
+ 
+-public class PackageExt {
++public class PackageExt implements PackageExtIface {
+     public static final PackageExt DEFAULT = new PackageExt(PackageId.UNKNOWN, 0);
+ 
+     private final int packageId;
+@@ -15,6 +18,14 @@ public class PackageExt {
+ 
+     private final PackageHooks hooks;
+ 
++    public static PackageExt get(AndroidPackage pkg) {
++        PackageExtIface i = pkg.ext();
++        if (i != null) {
++            return (PackageExt) i;
++        }
++        return DEFAULT;
++    }
++
+     public PackageExt(int packageId, int flags) {
+         this.packageId = packageId;
+         this.flags = flags;
+@@ -30,7 +41,7 @@ public class PackageExt {
+     }
+ 
+     public AppInfoExt toAppInfoExt(PackageImpl pkg) {
+-        AppCompatProtos.CompatConfig compatConfig = pkg.getAppCompatConfig();
++        AppCompatProtos.CompatConfig compatConfig = AppCompatConf.get(pkg);
+ 
+         if (this == DEFAULT && compatConfig == null) {
+             return AppInfoExt.DEFAULT;
+diff --git a/services/core/java/com/android/server/pm/ext/PackageExtInit.java b/services/core/java/com/android/server/pm/ext/PackageExtInit.java
+index 5285060bc236..cb4fd513228d 100644
+--- a/services/core/java/com/android/server/pm/ext/PackageExtInit.java
++++ b/services/core/java/com/android/server/pm/ext/PackageExtInit.java
+@@ -4,20 +4,20 @@ import android.annotation.Nullable;
+ import android.content.pm.SigningDetails;
+ import android.content.pm.parsing.result.ParseInput;
+ import android.content.pm.parsing.result.ParseResult;
+-import android.ext.PackageId;
+ import android.ext.AppInfoExt;
++import android.ext.PackageId;
+ import android.os.Bundle;
+ import android.util.Slog;
+ 
+-import com.android.server.pm.parsing.pkg.PackageImpl;
+-import com.android.server.pm.pkg.parsing.ParsingPackage;
+-import com.android.server.pm.pkg.parsing.ParsingPackageUtils;
++import com.android.internal.pm.parsing.pkg.PackageImpl;
++import com.android.internal.pm.pkg.parsing.ParsingPackage;
++import com.android.internal.pm.pkg.parsing.ParsingPackageUtils;
+ 
+ import libcore.util.HexEncoding;
+ 
+ import static android.ext.PackageId.*;
+ 
+-public class PackageExtInit {
++public class PackageExtInit implements ParsingPackageUtils.PackageExtInitIface {
+     private static final String TAG = PackageExtInit.class.getSimpleName();
+ 
+     private final ParseInput input;
+diff --git a/services/core/java/com/android/server/pm/ext/PackageHooks.java b/services/core/java/com/android/server/pm/ext/PackageHooks.java
+index 58d58be697bb..15d0ff4134c8 100644
+--- a/services/core/java/com/android/server/pm/ext/PackageHooks.java
++++ b/services/core/java/com/android/server/pm/ext/PackageHooks.java
+@@ -66,7 +66,7 @@ public class PackageHooks {
+             PackageStateInternal pkgSetting, int pkgUserId, PackageStateInternal otherPkgSetting) {
+         AndroidPackage pkg = pkgSetting.getPkg();
+         if (pkg != null) {
+-            return pkg.ext().hooks().shouldBlockPackageVisibility(pkgUserId, otherPkgSetting);
++            return PackageExt.get(pkg).hooks().shouldBlockPackageVisibility(pkgUserId, otherPkgSetting);
+         }
+ 
+         return false;
+diff --git a/services/core/java/com/android/server/pm/parsing/PackageParser2.java b/services/core/java/com/android/server/pm/parsing/PackageParser2.java
+index b6a08a5a546f..2db7602dcf6d 100644
+--- a/services/core/java/com/android/server/pm/parsing/PackageParser2.java
++++ b/services/core/java/com/android/server/pm/parsing/PackageParser2.java
+@@ -44,6 +44,9 @@ import com.android.internal.util.ArrayUtils;
+ import com.android.server.SystemConfig;
+ import com.android.server.pm.PackageManagerException;
+ import com.android.server.pm.PackageManagerService;
++import com.android.server.pm.ext.GmsCompatPkgParsingHooks;
++import com.android.server.pm.ext.PackageExtInit;
++import com.android.server.pm.ext.PackageHooksRegistry;
+ 
+ import java.io.File;
+ import java.util.List;
+@@ -59,6 +62,12 @@ import java.util.Set;
+  */
+ public class PackageParser2 implements AutoCloseable {
+ 
++    static {
++        PackageImpl.packageParsingHooksSupplier = PackageHooksRegistry::getParsingHooks;
++        ParsingPackageUtils.packageExtInitSupplier = PackageExtInit::new;
++        ParsingPackageUtils.gmsCompatClientServiceSupplier = GmsCompatPkgParsingHooks::maybeCreateClientService;
++    }
++
+     /**
+      * For parsing inside the system server but outside of {@link PackageManagerService}.
+      * Generally used for parsing information in an APK that hasn't been installed yet.
+-- 
+2.34.1
+

@@ -1,0 +1,607 @@
+From 518413a4a0d401019db8ba33d434fffaa90b2ef7 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Sun, 31 Jul 2022 15:22:06 +0300
+Subject: [PATCH 25/44] infrastructure for the Storage Scopes feature
+
+13: b5ff11faa09e
+---
+ core/api/system-current.txt                   |  18 ++
+ .../java/android/app/ActivityThreadHooks.java |   3 +
+ core/java/android/app/Instrumentation.java    |   2 +
+ core/java/android/app/StorageScope.java       | 159 +++++++++++++
+ core/java/android/app/WallpaperManager.java   |  12 +
+ .../content/pm/AppPermissionUtils.java        |  28 ++-
+ .../internal/app/StorageScopesAppHooks.java   | 211 ++++++++++++++++++
+ .../ExternalStorageProvider.java              |  18 ++
+ 8 files changed, 448 insertions(+), 3 deletions(-)
+ create mode 100644 core/java/android/app/StorageScope.java
+ create mode 100644 core/java/com/android/internal/app/StorageScopesAppHooks.java
+
+diff --git a/core/api/system-current.txt b/core/api/system-current.txt
+index e871dd5e0c9a..27a77d5715e6 100644
+--- a/core/api/system-current.txt
++++ b/core/api/system-current.txt
+@@ -1111,6 +1111,24 @@ package android.app {
+     method public boolean isStatusBarExpansionDisabled();
+   }
+ 
++  public final class StorageScope {
++    ctor public StorageScope(@NonNull String, int);
++    method @NonNull public static android.content.Intent createConfigActivityIntent(@NonNull String);
++    method @NonNull public static android.app.StorageScope[] deserializeArray(@NonNull android.content.pm.GosPackageState);
++    method public boolean isDirectory();
++    method public boolean isFile();
++    method public boolean isWritable();
++    method public static int maxArrayLength();
++    method @Nullable public static byte[] serializeArray(@NonNull android.app.StorageScope[]);
++    field public static final String EXTERNAL_STORAGE_PROVIDER_METHOD_CONVERT_DOC_ID_TO_PATH = "StorageScopes_convertDocIdToPath";
++    field public static final int FLAG_ALLOW_WRITES = 1; // 0x1
++    field public static final int FLAG_IS_DIR = 2; // 0x2
++    field public static final String MEDIA_PROVIDER_METHOD_INVALIDATE_MEDIA_PROVIDER_CACHE = "StorageScopes_invalidateCache";
++    field public static final String MEDIA_PROVIDER_METHOD_MEDIA_ID_TO_FILE_PATH = "StorageScopes_mediaIdToFilePath";
++    field public final int flags;
++    field @NonNull public final String path;
++  }
++
+   public final class SystemServiceRegistry {
+     method public static <TServiceClass> void registerContextAwareService(@NonNull String, @NonNull Class<TServiceClass>, @NonNull android.app.SystemServiceRegistry.ContextAwareServiceProducerWithBinder<TServiceClass>);
+     method public static <TServiceClass> void registerContextAwareService(@NonNull String, @NonNull Class<TServiceClass>, @NonNull android.app.SystemServiceRegistry.ContextAwareServiceProducerWithoutBinder<TServiceClass>);
+diff --git a/core/java/android/app/ActivityThreadHooks.java b/core/java/android/app/ActivityThreadHooks.java
+index d301b83c7f21..b78e85b70d94 100644
+--- a/core/java/android/app/ActivityThreadHooks.java
++++ b/core/java/android/app/ActivityThreadHooks.java
+@@ -9,6 +9,8 @@ import android.os.Process;
+ import android.os.RemoteException;
+ import android.util.Log;
+ 
++import com.android.internal.app.StorageScopesAppHooks;
++
+ import java.util.Objects;
+ 
+ class ActivityThreadHooks {
+@@ -63,6 +65,7 @@ class ActivityThreadHooks {
+     // called from both main and worker threads
+     static void onGosPackageStateChanged(Context ctx, @Nullable GosPackageState state, boolean fromBind) {
+         if (state != null) {
++            StorageScopesAppHooks.maybeEnable(state);
+         }
+     }
+ 
+diff --git a/core/java/android/app/Instrumentation.java b/core/java/android/app/Instrumentation.java
+index 2162e3a77f15..df6fc69f4e4f 100644
+--- a/core/java/android/app/Instrumentation.java
++++ b/core/java/android/app/Instrumentation.java
+@@ -60,6 +60,7 @@ import android.view.ViewConfiguration;
+ import android.view.Window;
+ import android.view.WindowManagerGlobal;
+ 
++import com.android.internal.app.StorageScopesAppHooks;
+ import com.android.internal.content.ReferrerIntent;
+ 
+ import java.io.File;
+@@ -1941,6 +1942,7 @@ public class Instrumentation {
+         try {
+             intent.migrateExtraStreamToClipData(who);
+             intent.prepareToLeaveProcess(who);
++            StorageScopesAppHooks.maybeModifyActivityIntent(who, intent);
+             int result = ActivityTaskManager.getService().startActivity(whoThread,
+                     who.getOpPackageName(), who.getAttributionTag(), intent,
+                     intent.resolveTypeIfNeeded(who.getContentResolver()), token,
+diff --git a/core/java/android/app/StorageScope.java b/core/java/android/app/StorageScope.java
+new file mode 100644
+index 000000000000..c9f1af124954
+--- /dev/null
++++ b/core/java/android/app/StorageScope.java
+@@ -0,0 +1,159 @@
++/*
++ * Copyright (C) 2022 GrapheneOS
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package android.app;
++
++import android.annotation.NonNull;
++import android.annotation.Nullable;
++import android.annotation.SuppressLint;
++import android.annotation.SystemApi;
++import android.content.Intent;
++import android.content.pm.GosPackageState;
++import android.util.Log;
++
++import java.io.ByteArrayInputStream;
++import java.io.ByteArrayOutputStream;
++import java.io.DataInputStream;
++import java.io.DataOutputStream;
++
++/**
++ * @hide
++ */
++@SystemApi
++public final class StorageScope {
++    private static final String TAG = "StorageScope";
++
++    @NonNull
++    public final String path;
++    public final int flags; // note that flags are cast to short during serialization
++
++    public static final int FLAG_ALLOW_WRITES = 1;
++    public static final int FLAG_IS_DIR = 1 << 1;
++
++    public StorageScope(@NonNull String path, int flags) {
++        this.path = path;
++        this.flags = flags;
++    }
++
++    @NonNull
++    public static Intent createConfigActivityIntent(@NonNull String targetPkg) {
++        Intent i = new Intent(Intent.ACTION_MAIN);
++        i.setClassName("com.android.permissioncontroller",
++                "com.android.permissioncontroller.sscopes.StorageScopesActivity");
++        i.putExtra(Intent.EXTRA_PACKAGE_NAME, targetPkg);
++        return i;
++    }
++
++    public static int maxArrayLength() {
++        // Should be less than Byte.MAX_VALUE (it is cast to byte during serialization).
++        // Note that the MediaProvider filtering based on StorageScopes is O(n),
++        // where n is the number of the StorageScopes
++        return 20;
++    }
++
++    public boolean isWritable() {
++        return (flags & FLAG_ALLOW_WRITES) != 0;
++    }
++
++    public boolean isDirectory() {
++        return (flags & FLAG_IS_DIR) != 0;
++    }
++
++    public boolean isFile() {
++        return (flags & FLAG_IS_DIR) == 0;
++    }
++
++    private static final int VERSION = 0;
++
++    @Nullable
++    public static byte[] serializeArray(@NonNull @SuppressLint("ArrayReturn") StorageScope[] array) {
++        if (array.length == 0) {
++            return null; // special case to minimize the size of persistent state
++        }
++
++        ByteArrayOutputStream bos = new ByteArrayOutputStream(1000);
++        DataOutputStream s = new DataOutputStream(bos);
++        try {
++            s.writeByte(VERSION);
++
++            final int cnt = array.length;
++            if (cnt > maxArrayLength()) {
++                throw new IllegalStateException();
++            }
++            s.writeByte(cnt);
++
++            for (int i = 0; i < cnt; ++i) {
++                StorageScope scope = array[i];
++                s.writeUTF(scope.path);
++                s.writeShort(scope.flags);
++            }
++            return bos.toByteArray();
++        } catch (Exception e) {
++            throw new IllegalStateException(e);
++        }
++    }
++
++    @NonNull @SuppressLint("ArrayReturn")
++    public static StorageScope[] deserializeArray(@NonNull GosPackageState gosPackageState) {
++        byte[] ser = gosPackageState.storageScopes;
++
++        if (ser == null) {
++            return new StorageScope[0];
++        }
++
++        DataInputStream s = new DataInputStream(new ByteArrayInputStream(ser));
++        try {
++            final int version = s.readByte();
++            if (version != StorageScope.VERSION) {
++                Log.e(TAG, "unexpected version " + version);
++                return new StorageScope[0];
++            }
++
++            int cnt = s.readByte();
++            StorageScope[] arr = new StorageScope[cnt];
++            for (int i = 0; i < cnt; ++i) {
++                String path = s.readUTF();
++                short pathFlags = (short) s.readUnsignedShort();
++
++                arr[i] = new StorageScope(path, pathFlags);
++            }
++
++            return arr;
++        } catch (Exception e) {
++            Log.e(TAG, "deserialization failed", e);
++            return new StorageScope[0];
++        }
++    }
++
++    @Override
++    public boolean equals(Object obj) {
++        if (!(obj instanceof StorageScope)) {
++            return false;
++        }
++        StorageScope o = (StorageScope) obj;
++        return path.equals(o.path) && flags == o.flags;
++    }
++
++    @Override
++    public int hashCode() {
++        return 31 * flags + path.hashCode();
++    }
++
++    public static final String MEDIA_PROVIDER_METHOD_INVALIDATE_MEDIA_PROVIDER_CACHE = "StorageScopes_invalidateCache";
++    public static final String MEDIA_PROVIDER_METHOD_MEDIA_ID_TO_FILE_PATH = "StorageScopes_mediaIdToFilePath";
++
++    public static final String EXTERNAL_STORAGE_PROVIDER_METHOD_CONVERT_DOC_ID_TO_PATH = "StorageScopes_convertDocIdToPath";
++}
+diff --git a/core/java/android/app/WallpaperManager.java b/core/java/android/app/WallpaperManager.java
+index 820ff3e308e4..f58378e8d64d 100644
+--- a/core/java/android/app/WallpaperManager.java
++++ b/core/java/android/app/WallpaperManager.java
+@@ -87,6 +87,7 @@ import android.view.Display;
+ import android.view.WindowManagerGlobal;
+ 
+ import com.android.internal.R;
++import com.android.internal.app.StorageScopesAppHooks;
+ 
+ import libcore.io.IoUtils;
+ 
+@@ -647,6 +648,11 @@ public class WallpaperManager {
+                         return getDefaultWallpaper(context, FLAG_SYSTEM);
+                     }
+ 
++                    if (StorageScopesAppHooks.isEnabled()) {
++                        Log.d("StorageScopes", "returning default wallpaper");
++                        return getDefaultWallpaper(context, FLAG_SYSTEM);
++                    }
++
+                     if (context.getApplicationInfo().targetSdkVersion < Build.VERSION_CODES.O_MR1) {
+                         Log.w(TAG, "No permission to access wallpaper, suppressing"
+                                 + " exception to avoid crashing legacy app.");
+@@ -1696,6 +1702,12 @@ public class WallpaperManager {
+                             + " wallpaper file to avoid crashing legacy app.");
+                     return getDefaultSystemWallpaperFile();
+                 }
++
++                if (StorageScopesAppHooks.isEnabled()) {
++                    Log.d("StorageScopes", "returning default wallpaper file");
++                    return getDefaultSystemWallpaperFile();
++                }
++
+                 if (mContext.getApplicationInfo().targetSdkVersion < Build.VERSION_CODES.O_MR1) {
+                     Log.w(TAG, "No permission to access wallpaper, suppressing"
+                             + " exception to avoid crashing legacy app.");
+diff --git a/core/java/android/content/pm/AppPermissionUtils.java b/core/java/android/content/pm/AppPermissionUtils.java
+index 2f3f50dc11b7..32333689235c 100644
+--- a/core/java/android/content/pm/AppPermissionUtils.java
++++ b/core/java/android/content/pm/AppPermissionUtils.java
+@@ -19,6 +19,8 @@ package android.content.pm;
+ import android.annotation.NonNull;
+ import android.annotation.SystemApi;
+ 
++import com.android.internal.app.StorageScopesAppHooks;
++
+ /** @hide */
+ @SystemApi
+ public class AppPermissionUtils {
+@@ -30,6 +32,10 @@ public class AppPermissionUtils {
+     // android.permission.PermissionManager#checkPermissionUncached
+     /** @hide */
+     public static boolean shouldSpoofSelfCheck(String permName) {
++        if (StorageScopesAppHooks.shouldSpoofSelfPermissionCheck(permName)) {
++            return true;
++        }
++
+         if (SrtPermissions.shouldSpoofSelfCheck(permName)) {
+             return true;
+         }
+@@ -43,6 +49,10 @@ public class AppPermissionUtils {
+     // android.app.AppOpsManager#unsafeCheckOpRawNoThrow
+     /** @hide */
+     public static boolean shouldSpoofSelfAppOpCheck(int op) {
++        if (StorageScopesAppHooks.shouldSpoofSelfAppOpCheck(op)) {
++            return true;
++        }
++
+         return false;
+     }
+ 
+@@ -52,16 +62,28 @@ public class AppPermissionUtils {
+         // permission is split into multiple permissions (based on app's targetSdk), and at least
+         // one of of those split permissions is present in manifest, then permission prompt would be
+         // shown anyway.
+-        return getSpoofablePermissionDflag(ps, perm) != 0;
++        return getSpoofablePermissionDflag(ps, perm, true) != 0;
+     }
+ 
+     // Controls spoofing of Activity#onRequestPermissionsResult() callback
+     public static boolean shouldSpoofPermissionRequestResult(@NonNull GosPackageState ps, @NonNull String perm) {
+-        int dflag = getSpoofablePermissionDflag(ps, perm);
++        int dflag = getSpoofablePermissionDflag(ps, perm, false);
+         return dflag != 0 && ps.hasDerivedFlag(dflag);
+     }
+ 
+-    private static int getSpoofablePermissionDflag(GosPackageState ps, String perm) {
++    private static int getSpoofablePermissionDflag(GosPackageState ps, String perm, boolean forRequestDialog) {
++        if (ps.hasFlag(GosPackageState.FLAG_STORAGE_SCOPES_ENABLED)) {
++            int permDflag = StorageScopesAppHooks.getSpoofablePermissionDflag(perm);
++            if (permDflag != 0) {
++                if (!forRequestDialog) {
++                    if (StorageScopesAppHooks.shouldSkipPermissionCheckSpoof(ps.derivedFlags, permDflag)) {
++                        return 0;
++                    }
++                }
++                return permDflag;
++            }
++        }
++
+         return 0;
+     }
+ 
+diff --git a/core/java/com/android/internal/app/StorageScopesAppHooks.java b/core/java/com/android/internal/app/StorageScopesAppHooks.java
+new file mode 100644
+index 000000000000..33b7a4399598
+--- /dev/null
++++ b/core/java/com/android/internal/app/StorageScopesAppHooks.java
+@@ -0,0 +1,211 @@
++/*
++ * Copyright (C) 2022 GrapheneOS
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.internal.app;
++
++import android.Manifest;
++import android.annotation.AnyThread;
++import android.app.AppOpsManager;
++import android.content.Context;
++import android.content.Intent;
++import android.content.pm.GosPackageState;
++import android.net.Uri;
++import android.os.Environment;
++import android.provider.MediaStore;
++import android.provider.Settings;
++
++import static android.content.pm.GosPackageState.*;
++
++public class StorageScopesAppHooks {
++    private static final String TAG = "StorageScopesAppHooks";
++
++    private static volatile boolean isEnabled;
++    private static int gosPsDerivedFlags;
++
++    @AnyThread
++    public static void maybeEnable(GosPackageState ps) {
++        if (isEnabled) {
++            return;
++        }
++
++        if (ps.hasFlag(FLAG_STORAGE_SCOPES_ENABLED)) {
++            gosPsDerivedFlags = ps.derivedFlags;
++            isEnabled = true;
++        }
++    }
++
++    public static boolean isEnabled() {
++        return isEnabled;
++    }
++
++    public static boolean shouldSkipPermissionCheckSpoof(int gosPsDflags, int permDerivedFlag) {
++        if ((gosPsDflags & DFLAG_HAS_READ_MEDIA_VISUAL_USER_SELECTED_DECLARATION) != 0) {
++            switch (permDerivedFlag) {
++                case DFLAG_HAS_READ_MEDIA_AUDIO_DECLARATION:
++                case DFLAG_HAS_READ_MEDIA_VIDEO_DECLARATION:
++                    // see https://developer.android.com/about/versions/14/changes/partial-photo-video-access
++                    return true;
++            }
++        }
++
++        return false;
++    }
++
++    // call only if isEnabled == true
++    private static boolean shouldSpoofSelfPermissionCheckInner(int permDerivedFlag) {
++        if (permDerivedFlag == 0) {
++            return false;
++        }
++
++        if (shouldSkipPermissionCheckSpoof(gosPsDerivedFlags, permDerivedFlag)) {
++            return false;
++        }
++
++        return (gosPsDerivedFlags & permDerivedFlag) != 0;
++    }
++
++    public static boolean shouldSpoofSelfPermissionCheck(String permName) {
++        if (!isEnabled) {
++            return false;
++        }
++
++        return shouldSpoofSelfPermissionCheckInner(getSpoofablePermissionDflag(permName));
++    }
++
++    public static boolean shouldSpoofSelfAppOpCheck(int op) {
++        if (!isEnabled) {
++            return false;
++        }
++
++        return shouldSpoofSelfPermissionCheckInner(getSpoofableAppOpPermissionDflag(op));
++    }
++
++    // Instrumentation#execStartActivity(Context, IBinder, IBinder, Activity, Intent, int, Bundle)
++    public static void maybeModifyActivityIntent(Context ctx, Intent i) {
++        String action = i.getAction();
++        if (action == null) {
++            return;
++        }
++
++        int op;
++        switch (action) {
++            case Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION:
++                op = AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE;
++                break;
++            case Settings.ACTION_REQUEST_MANAGE_MEDIA:
++                op = AppOpsManager.OP_MANAGE_MEDIA;
++                break;
++            default:
++                return;
++        }
++
++        Uri uri = i.getData();
++        if (uri == null || !"package".equals(uri.getScheme())) {
++            return;
++        }
++
++        String pkgName = uri.getSchemeSpecificPart();
++
++        if (pkgName == null) {
++            return;
++        }
++
++        if (!pkgName.equals(ctx.getPackageName())) {
++            return;
++        }
++
++        boolean shouldModify = false;
++
++        if (shouldSpoofSelfAppOpCheck(op)) {
++            // in case a buggy app launches intent again despite pseudo-having the permission
++            shouldModify = true;
++        } else {
++            if (op == AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE) {
++                shouldModify = !Environment.isExternalStorageManager();
++            } else if (op == AppOpsManager.OP_MANAGE_MEDIA) {
++                shouldModify = !MediaStore.canManageMedia(ctx);
++            }
++        }
++
++        if (shouldModify) {
++            i.setAction(action + "_PROMPT");
++        }
++    }
++
++    public static int getSpoofablePermissionDflag(String permName) {
++        switch (permName) {
++            case Manifest.permission.READ_EXTERNAL_STORAGE:
++                return DFLAG_HAS_READ_EXTERNAL_STORAGE_DECLARATION;
++
++            case Manifest.permission.WRITE_EXTERNAL_STORAGE:
++                return DFLAG_HAS_WRITE_EXTERNAL_STORAGE_DECLARATION;
++
++            case Manifest.permission.ACCESS_MEDIA_LOCATION:
++                return DFLAG_HAS_ACCESS_MEDIA_LOCATION_DECLARATION;
++
++            case Manifest.permission.READ_MEDIA_AUDIO:
++                return DFLAG_HAS_READ_MEDIA_AUDIO_DECLARATION;
++
++            case Manifest.permission.READ_MEDIA_IMAGES:
++                return DFLAG_HAS_READ_MEDIA_IMAGES_DECLARATION;
++
++            case Manifest.permission.READ_MEDIA_VIDEO:
++                return DFLAG_HAS_READ_MEDIA_VIDEO_DECLARATION;
++
++            case Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED:
++                return DFLAG_HAS_READ_MEDIA_VISUAL_USER_SELECTED_DECLARATION;
++
++            default:
++                return 0;
++        }
++    }
++
++    private static int getSpoofableAppOpPermissionDflag(int op) {
++        switch (op) {
++            case AppOpsManager.OP_READ_EXTERNAL_STORAGE:
++                return DFLAG_HAS_READ_EXTERNAL_STORAGE_DECLARATION;
++
++            case AppOpsManager.OP_WRITE_EXTERNAL_STORAGE:
++                return DFLAG_HAS_WRITE_EXTERNAL_STORAGE_DECLARATION;
++
++            case AppOpsManager.OP_READ_MEDIA_AUDIO:
++                return DFLAG_HAS_READ_MEDIA_AUDIO_DECLARATION;
++
++            case AppOpsManager.OP_READ_MEDIA_IMAGES:
++                return DFLAG_HAS_READ_MEDIA_IMAGES_DECLARATION;
++
++            case AppOpsManager.OP_READ_MEDIA_VIDEO:
++                return DFLAG_HAS_READ_MEDIA_VIDEO_DECLARATION;
++
++            case AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE:
++                return DFLAG_HAS_MANAGE_EXTERNAL_STORAGE_DECLARATION;
++
++            case AppOpsManager.OP_MANAGE_MEDIA:
++                return DFLAG_HAS_MANAGE_MEDIA_DECLARATION;
++
++            case AppOpsManager.OP_ACCESS_MEDIA_LOCATION:
++                return DFLAG_HAS_ACCESS_MEDIA_LOCATION_DECLARATION;
++
++            case AppOpsManager.OP_READ_MEDIA_VISUAL_USER_SELECTED:
++                return DFLAG_HAS_READ_MEDIA_VISUAL_USER_SELECTED_DECLARATION;
++
++            default:
++                return 0;
++        }
++    }
++
++    private StorageScopesAppHooks() {}
++}
+diff --git a/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java b/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java
+index 3409c29d3c2c..11d75f909dcd 100644
+--- a/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java
++++ b/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java
+@@ -768,6 +768,24 @@ public class ExternalStorageProvider extends FileSystemProvider {
+                         throw new IllegalStateException(e);
+                     }
+                 }
++                case android.app.StorageScope.EXTERNAL_STORAGE_PROVIDER_METHOD_CONVERT_DOC_ID_TO_PATH: {
++                    // only PermissionController is expected to call this method
++                    getContext().enforceCallingPermission(
++                            android.Manifest.permission.GRANT_RUNTIME_PERMISSIONS, null);
++
++                    String docId = arg;
++                    String path;
++                    try {
++                        path = getFileForDocId(docId, true).getAbsolutePath();
++                    } catch (Exception e) {
++                        Log.d(TAG, method + " failed", e);
++                        return null;
++                    }
++
++                    final Bundle out = new Bundle();
++                    out.putString(DocumentsContract.EXTRA_RESULT, path);
++                    return out;
++                }
+                 default:
+                     Log.w(TAG, "unknown method passed to call(): " + method);
+             }
+-- 
+2.34.1
+

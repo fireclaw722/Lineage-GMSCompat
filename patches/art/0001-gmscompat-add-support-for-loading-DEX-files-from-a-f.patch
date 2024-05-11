@@ -1,0 +1,52 @@
+From c2a84caa51f7180f0afdb4a3b6af5fbaa0151aca Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Fri, 18 Mar 2022 10:15:20 +0200
+Subject: [PATCH] gmscompat: add support for loading DEX files from a file
+ descriptor
+
+Needed to load code from GmsCore Dynamite APK modules, which are available only by a file descriptor
+reference.
+
+/proc/self/fd paths are intentionally not used, see 260785f319
+
+13: 2e4ed717a1 260785f319
+---
+ runtime/oat_file_manager.cc | 22 +++++++++++++++++-----
+ 1 file changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/runtime/oat_file_manager.cc b/runtime/oat_file_manager.cc
+index 5c97db20ba..24ac933ae2 100644
+--- a/runtime/oat_file_manager.cc
++++ b/runtime/oat_file_manager.cc
+@@ -465,11 +465,23 @@ std::vector<std::unique_ptr<const DexFile>> OatFileManager::OpenDexFilesFromOat(
+   if (dex_files.empty()) {
+     std::string error_msg;
+     static constexpr bool kVerifyChecksum = true;
+-    ArtDexFileLoader dex_file_loader(dex_location);
+-    if (!dex_file_loader.Open(Runtime::Current()->IsVerificationEnabled(),
+-                              kVerifyChecksum,
+-                              /*out*/ &error_msg,
+-                              &dex_files)) {
++
++    bool res = false;
++    int fd;
++    if (!strncmp("/gmscompat_fd_", dex_location, strlen("/gmscompat_fd_")) &&
++          sscanf(dex_location, "/gmscompat_fd_%d", &fd) == 1) {
++      fd = dup(fd);
++      unix_file::FdFile fdFile(fd, false);
++      ArtDexFileLoader dex_file_loader(&fdFile, dex_location);
++      res = dex_file_loader.Open(Runtime::Current()->IsVerificationEnabled(), kVerifyChecksum,
++            /*out*/ &error_msg, &dex_files);
++    } else {
++      ArtDexFileLoader dex_file_loader(dex_location);
++      res = dex_file_loader.Open(Runtime::Current()->IsVerificationEnabled(), kVerifyChecksum,
++            /*out*/ &error_msg, &dex_files);
++    }
++
++    if (!res) {
+       ScopedTrace fail_to_open_dex_from_apk("FailedToOpenDexFilesFromApk");
+       LOG(WARNING) << error_msg;
+       error_msgs->push_back("Failed to open dex files from " + std::string(dex_location)
+-- 
+2.34.1
+

@@ -1,0 +1,36 @@
+From 7e7d7bc2672e9e54213a4aa38fff8e7903500f25 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Wed, 3 Jan 2024 15:26:50 +0200
+Subject: [PATCH 10/45] define package name of first-party app source
+
+---
+ core/java/android/util/PackageUtils.java | 4 ++++
+ core/res/res/values/config_ext.xml       | 2 ++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/core/java/android/util/PackageUtils.java b/core/java/android/util/PackageUtils.java
+index 915fa8704cf7..8531804f9f00 100644
+--- a/core/java/android/util/PackageUtils.java
++++ b/core/java/android/util/PackageUtils.java
+@@ -278,4 +278,8 @@ public final class PackageUtils {
+         }
+         return list;
+     }
++
++    public static String getFirstPartyAppSourcePackageName(Context ctx) {
++        return ctx.getString(com.android.internal.R.string.config_first_party_app_source_package_name);
++    }
+ }
+diff --git a/core/res/res/values/config_ext.xml b/core/res/res/values/config_ext.xml
+index 045e125f3d8d..5e0b997d6283 100644
+--- a/core/res/res/values/config_ext.xml
++++ b/core/res/res/values/config_ext.xml
+@@ -1,3 +1,5 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
++    <string name="config_first_party_app_source_package_name">app.grapheneos.apps</string>
++    <java-symbol type="string" name="config_first_party_app_source_package_name" />
+ </resources>
+-- 
+2.34.1
+

@@ -1,0 +1,96 @@
+From a782c62cc5ed2c8b6d560194ba6dafd70b63cf35 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Tue, 5 Mar 2024 18:20:31 +0200
+Subject: [PATCH 41/45] 14 QPR2: adjust AppCompatConfig integration
+
+---
+ .../internal/pm/parsing/pkg/PackageImpl.java  | 28 ++-----------------
+ .../com/android/server/ext/AppCompatConf.java | 26 ++++++++++++++++-
+ 2 files changed, 27 insertions(+), 27 deletions(-)
+
+diff --git a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+index 7c25b9bb8204..7931c72b1ebd 100644
+--- a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
++++ b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+@@ -3830,30 +3830,6 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+         return ext;
+     }
+ 
+-    private long cachedCompatConfigVersionCode;
+-    private com.android.server.os.nano.AppCompatProtos.CompatConfig cachedCompatConfig;
+-
+-    @Nullable
+-    public com.android.server.os.nano.AppCompatProtos.CompatConfig getAppCompatConfig() {
+-        var configs = com.android.server.ext.AppCompatConf.getParsedConfigs();
+-
+-        if (configs == null) {
+-            return null;
+-        }
+-
+-        synchronized (this) {
+-            if (configs.versionCode == cachedCompatConfigVersionCode) {
+-                return cachedCompatConfig;
+-            }
+-        }
+-
+-        var config = com.android.server.ext.AppCompatConf.get(configs, this);
+-
+-        synchronized (this) {
+-            cachedCompatConfigVersionCode = configs.versionCode;
+-            cachedCompatConfig = config;
+-        }
+-
+-        return config;
+-    }
++    public long cachedCompatConfigVersionCode;
++    public Object cachedCompatConfig;
+ }
+diff --git a/services/core/java/com/android/server/ext/AppCompatConf.java b/services/core/java/com/android/server/ext/AppCompatConf.java
+index 9f614c1b887b..0500e7616a17 100644
+--- a/services/core/java/com/android/server/ext/AppCompatConf.java
++++ b/services/core/java/com/android/server/ext/AppCompatConf.java
+@@ -12,11 +12,11 @@ import android.util.ArrayMap;
+ import android.util.Slog;
+ 
+ import com.android.internal.os.BackgroundThread;
++import com.android.internal.pm.parsing.pkg.PackageImpl;
+ import com.android.server.LocalServices;
+ import com.android.server.os.nano.AppCompatProtos;
+ import com.android.server.os.nano.AppCompatProtos.AppCompatConfig;
+ import com.android.server.os.nano.AppCompatProtos.CompatConfig;
+-import com.android.server.pm.parsing.pkg.PackageImpl;
+ import com.android.server.pm.pkg.AndroidPackage;
+ 
+ import java.util.zip.ZipEntry;
+@@ -168,4 +168,28 @@ public class AppCompatConf {
+             return null;
+         }
+     }
++
++    @Nullable
++    public static AppCompatProtos.CompatConfig get(PackageImpl pkg) {
++        var configs = com.android.server.ext.AppCompatConf.getParsedConfigs();
++
++        if (configs == null) {
++            return null;
++        }
++
++        synchronized (pkg) {
++            if (configs.versionCode == pkg.cachedCompatConfigVersionCode) {
++                return (AppCompatProtos.CompatConfig) pkg.cachedCompatConfig;
++            }
++        }
++
++        var config = get(configs, pkg);
++
++        synchronized (pkg) {
++            pkg.cachedCompatConfigVersionCode = configs.versionCode;
++            pkg.cachedCompatConfig = config;
++        }
++
++        return config;
++    }
+ }
+-- 
+2.34.1
+

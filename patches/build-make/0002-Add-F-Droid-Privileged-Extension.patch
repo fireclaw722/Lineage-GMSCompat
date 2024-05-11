@@ -1,0 +1,25 @@
+From 08ad6276b1a7c4f742f550a56582c27ebc3fa679 Mon Sep 17 00:00:00 2001
+From: Builder <admin@ceruleanfire.com>
+Date: Tue, 7 May 2024 23:58:44 +0000
+Subject: [PATCH 2/2] Add F-Droid Privileged Extension
+
+Change-Id: I355ea45333936dfe685601ed644b886a9be78722
+---
+ target/product/handheld_system.mk | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/target/product/handheld_system.mk b/target/product/handheld_system.mk
+index 5e9530a75a..c157a12c6a 100644
+--- a/target/product/handheld_system.mk
++++ b/target/product/handheld_system.mk
+@@ -50,6 +50,7 @@ PRODUCT_PACKAGES += \
+     EasterEgg \
+     ExternalStorageProvider \
+     FusedLocation \
++    F-DroidPrivilegedExtension \
+     GmsCompat \
+     InputDevices \
+     KeyChain \
+-- 
+2.34.1
+

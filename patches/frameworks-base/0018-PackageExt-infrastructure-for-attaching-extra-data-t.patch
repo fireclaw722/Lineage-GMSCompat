@@ -1,0 +1,324 @@
+From 6f6dc7c9b608513ee9ac46c5a0294425e08716cb Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 18 Dec 2023 16:18:30 +0200
+Subject: [PATCH 18/45] PackageExt: infrastructure for attaching extra data to
+ known parsed APKs
+
+---
+ core/api/system-current.txt                   |   8 ++
+ core/java/android/ext/PackageId.java          |  14 +++
+ .../internal/pm/parsing/pkg/PackageImpl.java  |  16 +++
+ .../pm/pkg/parsing/ParsingPackage.java        |   2 +
+ .../pm/pkg/parsing/ParsingPackageUtils.java   |  15 ++-
+ .../android/server/pm/pkg/AndroidPackage.java |   4 +
+ .../com/android/server/pm/ext/PackageExt.java |  39 ++++++
+ .../android/server/pm/ext/PackageExtInit.java | 114 ++++++++++++++++++
+ 8 files changed, 210 insertions(+), 2 deletions(-)
+ create mode 100644 core/java/android/ext/PackageId.java
+ create mode 100644 services/core/java/com/android/server/pm/ext/PackageExt.java
+ create mode 100644 services/core/java/com/android/server/pm/ext/PackageExtInit.java
+
+diff --git a/core/api/system-current.txt b/core/api/system-current.txt
+index e92564b5d7c2..67225c33efd7 100644
+--- a/core/api/system-current.txt
++++ b/core/api/system-current.txt
+@@ -4357,6 +4357,14 @@ package android.debug {
+ 
+ }
+ 
++package android.ext {
++
++  public interface PackageId {
++    field public static final int UNKNOWN = 0; // 0x0
++  }
++
++}
++
+ package android.graphics.fonts {
+ 
+   public final class FontFamilyUpdateRequest {
+diff --git a/core/java/android/ext/PackageId.java b/core/java/android/ext/PackageId.java
+new file mode 100644
+index 000000000000..735eb115a099
+--- /dev/null
++++ b/core/java/android/ext/PackageId.java
+@@ -0,0 +1,14 @@
++package android.ext;
++
++import android.annotation.SystemApi;
++
++/** @hide */
++@SystemApi
++// Int values that are assigned to packages in this interface can be retrieved at runtime from
++// ApplicationInfo.ext().getPackageId() or from AndroidPackage.ext().getPackageId() (in system_server).
++//
++// PackageIds are assigned to parsed APKs only after they are verified, either by a certificate check
++// or by a check that the APK is stored on an immutable OS partition.
++public interface PackageId {
++    int UNKNOWN = 0;
++}
+diff --git a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+index 6545e0c2ab7f..3e5d2453aab7 100644
+--- a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
++++ b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+@@ -3249,6 +3249,7 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+         dest.writeInt(this.uid);
+         dest.writeLong(this.mBooleans);
+         dest.writeLong(this.mBooleans2);
++        this.ext.writeToParcel(dest);
+     }
+ 
+     public PackageImpl(Parcel in) {
+@@ -3413,6 +3414,8 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+         assignDerivedFields();
+         assignDerivedFields2();
+ 
++        this.ext = com.android.server.pm.ext.PackageExt.createFromParcel(this, in);
++
+         // Do not call makeImmutable here as cached parsing will need
+         // to mutate this instance before it's finalized.
+     }
+@@ -3797,4 +3800,17 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+     public com.android.server.pm.ext.PackageParsingHooks getPackageParsingHooks() {
+         return packageParsingHooks;
+     }
++
++    private com.android.server.pm.ext.PackageExt ext = com.android.server.pm.ext.PackageExt.DEFAULT;
++
++    @Override
++    public void setPackageExt(@Nullable com.android.server.pm.ext.PackageExt ext) {
++        this.ext = ext;
++    }
++
++    @Nullable
++    @Override
++    public com.android.server.pm.ext.PackageExt ext() {
++        return ext;
++    }
+ }
+diff --git a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
+index 1775970eb504..95475ab0b241 100644
+--- a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
++++ b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
+@@ -546,4 +546,6 @@ public interface ParsingPackage {
+     void initPackageParsingHooks();
+ 
+     com.android.server.pm.ext.PackageParsingHooks getPackageParsingHooks();
++
++    void setPackageExt(@Nullable com.android.server.pm.ext.PackageExt ext);
+ }
+diff --git a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
+index b9c2768830f9..f390c71d2f49 100644
+--- a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
++++ b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
+@@ -633,9 +633,16 @@ public class ParsingPackageUtils {
+ 
+             pkg.setVolumeUuid(volumeUuid);
+ 
++            var pkgExtInit = new com.android.server.pm.ext.PackageExtInit(input, pkg,
++                    (flags & PARSE_IS_SYSTEM_DIR) != 0);
++            pkgExtInit.run();
++
+             if ((flags & PARSE_COLLECT_CERTIFICATES) != 0) {
+-                final ParseResult<SigningDetails> ret =
+-                        getSigningDetails(input, pkg, false /*skipVerify*/);
++                // skip reparsing certificates if they were already parsed by PackageExtInit
++                ParseResult<SigningDetails> ret = pkgExtInit.getSigningDetailsParseResult();
++                if (ret == null) {
++                    ret = parseSigningDetails(input, pkg);
++                }
+                 if (ret.isError()) {
+                     return input.error(ret);
+                 }
+@@ -651,6 +658,10 @@ public class ParsingPackageUtils {
+         }
+     }
+ 
++    public static ParseResult<SigningDetails> parseSigningDetails(ParseInput input, ParsingPackage pkg) {
++        return getSigningDetails(input, pkg, false /*skipVerify*/);
++    }
++
+     private ParseResult<ParsingPackage> parseSplitApk(ParseInput input,
+             ParsingPackage pkg, int splitIndex, AssetManager assets, int flags) {
+         final String apkPath = pkg.getSplitCodePaths()[splitIndex];
+diff --git a/core/java/com/android/server/pm/pkg/AndroidPackage.java b/core/java/com/android/server/pm/pkg/AndroidPackage.java
+index adb0c6959f12..88b18124f0d7 100644
+--- a/core/java/com/android/server/pm/pkg/AndroidPackage.java
++++ b/core/java/com/android/server/pm/pkg/AndroidPackage.java
+@@ -1500,4 +1500,8 @@ public interface AndroidPackage {
+      * @hide
+      */
+     boolean isVisibleToInstantApps();
++
++    /** @hide */
++    @Immutable.Ignore
++    com.android.server.pm.ext.PackageExt ext();
+ }
+diff --git a/services/core/java/com/android/server/pm/ext/PackageExt.java b/services/core/java/com/android/server/pm/ext/PackageExt.java
+new file mode 100644
+index 000000000000..41fe7dd45db4
+--- /dev/null
++++ b/services/core/java/com/android/server/pm/ext/PackageExt.java
+@@ -0,0 +1,39 @@
++package com.android.server.pm.ext;
++
++import android.ext.PackageId;
++import android.os.Parcel;
++
++import com.android.server.pm.parsing.pkg.PackageImpl;
++
++public class PackageExt {
++    public static final PackageExt DEFAULT = new PackageExt(PackageId.UNKNOWN, 0);
++
++    private final int packageId;
++    private final int flags;
++
++    public PackageExt(int packageId, int flags) {
++        this.packageId = packageId;
++        this.flags = flags;
++    }
++
++    public int getPackageId() {
++        return packageId;
++    }
++
++    public void writeToParcel(Parcel dest) {
++        boolean def = this == DEFAULT;
++        dest.writeBoolean(def);
++        if (def) {
++            return;
++        }
++        dest.writeInt(this.packageId);
++        dest.writeInt(this.flags);
++    }
++
++    public static PackageExt createFromParcel(PackageImpl pkg, Parcel p) {
++        if (p.readBoolean()) {
++            return DEFAULT;
++        }
++        return new PackageExt(p.readInt(), p.readInt());
++    }
++}
+diff --git a/services/core/java/com/android/server/pm/ext/PackageExtInit.java b/services/core/java/com/android/server/pm/ext/PackageExtInit.java
+new file mode 100644
+index 000000000000..f99c63eb665e
+--- /dev/null
++++ b/services/core/java/com/android/server/pm/ext/PackageExtInit.java
+@@ -0,0 +1,114 @@
++package com.android.server.pm.ext;
++
++import android.annotation.Nullable;
++import android.content.pm.SigningDetails;
++import android.content.pm.parsing.result.ParseInput;
++import android.content.pm.parsing.result.ParseResult;
++import android.ext.PackageId;
++import android.ext.AppInfoExt;
++import android.os.Bundle;
++import android.util.Slog;
++
++import com.android.server.pm.parsing.pkg.PackageImpl;
++import com.android.server.pm.pkg.parsing.ParsingPackage;
++import com.android.server.pm.pkg.parsing.ParsingPackageUtils;
++
++import libcore.util.HexEncoding;
++
++import static android.ext.PackageId.*;
++
++public class PackageExtInit {
++    private static final String TAG = PackageExtInit.class.getSimpleName();
++
++    private final ParseInput input;
++    private final ParsingPackage parsingPackage;
++    private final PackageImpl pkg;
++    private final boolean isSystem;
++
++    @Nullable
++    private ParseResult<SigningDetails> signingDetailsParseResult;
++
++    public PackageExtInit(ParseInput input, ParsingPackage parsingPackage, boolean isSystem) {
++        this.input = input;
++        this.parsingPackage = parsingPackage;
++        this.pkg = (PackageImpl) parsingPackage;
++        this.isSystem = isSystem;
++    }
++
++    @Nullable
++    public ParseResult<SigningDetails> getSigningDetailsParseResult() {
++        return signingDetailsParseResult;
++    }
++
++    public void run() {
++        int packageId = getPackageId();
++
++        if (packageId != UNKNOWN) {
++            Slog.d(TAG, "set packageId of " +  pkg.getPackageName() + " to " + packageId);
++        }
++
++        var ext = new PackageExt(packageId, getExtFlags());
++
++        parsingPackage.setPackageExt(ext);
++    }
++
++    private int getExtFlags() {
++        int flags = 0;
++
++        Bundle metadata = pkg.getMetaData();
++        if (metadata != null) {
++        }
++
++        return flags;
++    }
++
++    private int getPackageId() {
++        return switch (pkg.getPackageName()) {
++
++            default -> PackageId.UNKNOWN;
++        };
++    }
++
++    private int validateSystemPkg(int packageId) {
++        if (isSystem) {
++            return packageId;
++        }
++        Slog.w(TAG, "expected " + pkg.getPackageName() + " to be a part of the system image");
++        return PackageId.UNKNOWN;
++    }
++
++    private int validate(int packageId, long minVersionCode, String... validCertificatesSha256) {
++        if (pkg.getLongVersionCode() < minVersionCode) {
++            Slog.d(TAG, "minVersionCode check failed, pkgName " + pkg.getPackageName() + "," +
++                    " pkgVersion: " + pkg.getLongVersionCode());
++            return PackageId.UNKNOWN;
++        }
++
++        SigningDetails signingDetails = pkg.getSigningDetails();
++
++        if (signingDetails == SigningDetails.UNKNOWN) {
++            final ParseResult<SigningDetails> result = ParsingPackageUtils.parseSigningDetails(input, parsingPackage);
++            signingDetailsParseResult = result;
++
++            if (result.isError()) {
++                Slog.e(TAG, "unable to parse SigningDetails for " + parsingPackage.getPackageName()
++                        + "; code " + result.getErrorCode() + "; msg " + result.getErrorMessage(),
++                        result.getException());
++                return PackageId.UNKNOWN;
++            }
++
++            signingDetails = result.getResult();
++        }
++
++        for (String certSha256String : validCertificatesSha256) {
++            byte[] validCertSha256 = HexEncoding.decode(certSha256String);
++            if (signingDetails.hasSha256Certificate(validCertSha256)) {
++                return packageId;
++            }
++        }
++
++        Slog.d(TAG, "SigningDetails of " + pkg.getPackageName() + " don't contain any of known certificates");
++
++        return PackageId.UNKNOWN;
++    }
++}
+-- 
+2.34.1
+

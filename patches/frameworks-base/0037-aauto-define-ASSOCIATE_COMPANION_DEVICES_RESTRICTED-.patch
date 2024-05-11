@@ -1,0 +1,77 @@
+From a776b18e9e2e78cd9142608edd8829bd5e81851e Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 18 Dec 2023 19:28:25 +0200
+Subject: [PATCH 37/45] aauto: define ASSOCIATE_COMPANION_DEVICES_RESTRICTED
+ permission
+
+---
+ core/res/AndroidManifest.xml                  |  4 +++
+ .../CompanionDeviceManagerService.java        | 30 ++++++++++++++++++-
+ 2 files changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index 6df03f19b6a4..f6f080719002 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -5743,6 +5743,10 @@
+     <permission android:name="android.permission.ASSOCIATE_COMPANION_DEVICES"
+         android:protectionLevel="internal|role" />
+ 
++    <!-- @hide -->
++    <permission android:name="android.permission.ASSOCIATE_COMPANION_DEVICES_RESTRICTED"
++        android:protectionLevel="internal" />
++
+     <!-- @SystemApi Allows an application to use SurfaceFlinger's low level features.
+          <p>Not for use by third-party applications.
+          @hide
+diff --git a/services/companion/java/com/android/server/companion/CompanionDeviceManagerService.java b/services/companion/java/com/android/server/companion/CompanionDeviceManagerService.java
+index cce596b7f088..17c127337cb1 100644
+--- a/services/companion/java/com/android/server/companion/CompanionDeviceManagerService.java
++++ b/services/companion/java/com/android/server/companion/CompanionDeviceManagerService.java
+@@ -1002,7 +1002,6 @@ public class CompanionDeviceManagerService extends SystemService {
+         }
+ 
+         @Override
+-        @EnforcePermission(ASSOCIATE_COMPANION_DEVICES)
+         public void createAssociation(String packageName, String macAddress, int userId,
+                 byte[] certificate) {
+             createAssociation_enforcePermission();
+@@ -1013,6 +1012,35 @@ public class CompanionDeviceManagerService extends SystemService {
+                 return;
+             }
+ 
++            try {
++                getContext().enforceCallingOrSelfPermission(
++                        android.Manifest.permission.ASSOCIATE_COMPANION_DEVICES, "createAssociation");
++            } catch (SecurityException se) {
++                String perm = android.Manifest.permission.ASSOCIATE_COMPANION_DEVICES_RESTRICTED;
++                if (getContext().checkCallingPermission(perm) != PERMISSION_GRANTED) {
++                    throw se;
++                }
++
++                int callingUid = Binder.getCallingUid();
++                if (UserHandle.getUserId(callingUid) != userId) {
++                    // don't allow interacting across users, which is allowed by upstream even without
++                    // the INTERACT_ACROSS_USERS permission
++                    throw new SecurityException("userId mismatch");
++                }
++
++                try {
++                    int targetUid = getContext().getPackageManager().getPackageUid(packageName, 0);
++
++                    if (targetUid != callingUid) {
++                        // don't allow creating companion device associations for other packages
++                        throw new SecurityException("targetUid mismatch");
++                    }
++
++                } catch (PackageManager.NameNotFoundException e) {
++                    throw new SecurityException(e);
++                }
++            }
++
+             final MacAddress macAddressObj = MacAddress.fromString(macAddress);
+             createNewAssociation(userId, packageName, macAddressObj, null, null, false);
+         }
+-- 
+2.34.1
+

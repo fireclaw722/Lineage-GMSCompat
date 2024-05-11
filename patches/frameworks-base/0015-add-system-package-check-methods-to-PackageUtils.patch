@@ -1,0 +1,70 @@
+From 656633e9ff964c559d65bd8faaa4430cdbd99243 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Thu, 22 Jun 2023 11:02:38 +0300
+Subject: [PATCH 15/44] add system package check methods to PackageUtils
+
+---
+ core/java/android/util/PackageUtils.java | 31 ++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/core/java/android/util/PackageUtils.java b/core/java/android/util/PackageUtils.java
+index ea7efc79de87..915fa8704cf7 100644
+--- a/core/java/android/util/PackageUtils.java
++++ b/core/java/android/util/PackageUtils.java
+@@ -19,9 +19,12 @@ package android.util;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.app.ActivityManager;
++import android.content.Context;
++import android.content.pm.PackageManager;
+ import android.content.pm.Signature;
+ import android.text.TextUtils;
+ 
++import libcore.util.EmptyArray;
+ import libcore.util.HexEncoding;
+ 
+ import java.io.ByteArrayOutputStream;
+@@ -31,7 +34,9 @@ import java.io.IOException;
+ import java.security.DigestInputStream;
+ import java.security.MessageDigest;
+ import java.security.NoSuchAlgorithmException;
++import java.util.ArrayList;
+ import java.util.Arrays;
++import java.util.List;
+ 
+ /**
+  * Helper functions applicable to packages.
+@@ -247,4 +252,30 @@ public final class PackageUtils {
+         }
+         return TextUtils.join(separator, pieces);
+     }
++
++    public static boolean isSystemPackage(Context ctx, @Nullable String pkg) {
++        if (TextUtils.isEmpty(pkg)) {
++            return false;
++        }
++        PackageManager pm = ctx.getPackageManager();
++        try {
++            return pm.getApplicationInfo(pkg, 0).isSystemApp();
++        } catch (PackageManager.NameNotFoundException e) {
++            return false;
++        }
++    }
++
++    public static String[] filterNonSystemPackages(Context ctx, String[] pkgs) {
++        return filterNonSystemPackagesL(ctx, pkgs).toArray(EmptyArray.STRING);
++    }
++
++    public static List<String> filterNonSystemPackagesL(Context ctx, String[] pkgs) {
++        var list = new ArrayList<String>(pkgs.length);
++        for (String pkg : pkgs) {
++            if (isSystemPackage(ctx, pkg)) {
++                list.add(pkg);
++            }
++        }
++        return list;
++    }
+ }
+-- 
+2.34.1
+

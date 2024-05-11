@@ -1,0 +1,32 @@
+From b10d59e8194578cbc1319fc1a89d21557682507d Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Wed, 15 Nov 2023 17:26:29 +0200
+Subject: [PATCH 34/44] add constants for some system package names
+
+---
+ core/java/android/ext/KnownSystemPackages.java | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+ create mode 100644 core/java/android/ext/KnownSystemPackages.java
+
+diff --git a/core/java/android/ext/KnownSystemPackages.java b/core/java/android/ext/KnownSystemPackages.java
+new file mode 100644
+index 000000000000..956c94e165b3
+--- /dev/null
++++ b/core/java/android/ext/KnownSystemPackages.java
+@@ -0,0 +1,13 @@
++package android.ext;
++
++/** @hide */
++public interface KnownSystemPackages {
++    String PERMISSION_CONTROLLER = "com.android.permissioncontroller";
++    String SETTINGS = "com.android.settings";
++    String SYSTEM_UI = "com.android.systemui";
++
++    String MEDIA_PROVIDER = "com.android.providers.media.module";
++    String CONTACTS_PROVIDER = "com.android.providers.contacts";
++
++    String LAUNCHER = "com.android.launcher3";
++}
+-- 
+2.34.1
+

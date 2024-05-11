@@ -1,0 +1,41 @@
+From 71093677b3d0a9ee92e308b49e0d8cbdfa8190cd Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 18 Dec 2023 16:57:49 +0200
+Subject: [PATCH 38/44] aauto: add definition of restricted
+ BLUETOOTH_PRIVILEGED permission
+
+---
+ core/api/system-current.txt  | 1 +
+ core/res/AndroidManifest.xml | 4 ++++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/core/api/system-current.txt b/core/api/system-current.txt
+index bd6719725e39..78fe62e458fe 100644
+--- a/core/api/system-current.txt
++++ b/core/api/system-current.txt
+@@ -88,6 +88,7 @@ package android {
+     field public static final String BIND_WALLPAPER_EFFECTS_GENERATION_SERVICE = "android.permission.BIND_WALLPAPER_EFFECTS_GENERATION_SERVICE";
+     field public static final String BIND_WEARABLE_SENSING_SERVICE = "android.permission.BIND_WEARABLE_SENSING_SERVICE";
+     field public static final String BLUETOOTH_MAP = "android.permission.BLUETOOTH_MAP";
++    field public static final String BLUETOOTH_PRIVILEGED_ANDROID_AUTO = "android.permission.BLUETOOTH_PRIVILEGED_ANDROID_AUTO";
+     field public static final String BRICK = "android.permission.BRICK";
+     field public static final String BRIGHTNESS_SLIDER_USAGE = "android.permission.BRIGHTNESS_SLIDER_USAGE";
+     field public static final String BROADCAST_CLOSE_SYSTEM_DIALOGS = "android.permission.BROADCAST_CLOSE_SYSTEM_DIALOGS";
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index d0658084f832..8053608525b8 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -2400,6 +2400,10 @@
+     <permission android:name="android.permission.BLUETOOTH_PRIVILEGED"
+         android:protectionLevel="signature|privileged" />
+ 
++    <!--- @SystemApi @hide -->
++    <permission android:name="android.permission.BLUETOOTH_PRIVILEGED_ANDROID_AUTO"
++        android:protectionLevel="internal" />
++
+     <!-- @SystemApi Control access to email providers exclusively for Bluetooth
+          @hide
+     -->
+-- 
+2.34.1
+

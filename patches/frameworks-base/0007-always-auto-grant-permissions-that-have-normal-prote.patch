@@ -1,0 +1,51 @@
+From 652da252335289ae97450d0b76d5b7751ac430f4 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Sat, 3 Dec 2022 15:23:38 +0200
+Subject: [PATCH 07/44] always auto-grant permissions that have "normal"
+ protectionLevel
+
+They are auto-granted unconditionally anyway during OS upgrade, app update, user profile creation etc.
+Before this commit, auto-grants were skipped after app install in some cases, eg when an app that
+declares a permission is installed after app that uses that permission.
+---
+ .../PermissionManagerServiceImpl.java          | 18 +-----------------
+ 1 file changed, 1 insertion(+), 17 deletions(-)
+
+diff --git a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java
+index 671e031b546b..c7c83acaa785 100644
+--- a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java
++++ b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java
+@@ -2712,29 +2712,13 @@ public class PermissionManagerServiceImpl implements PermissionManagerServiceInt
+                         mRegistry.addAppOpPermissionPackage(perm, pkg.getPackageName());
+                     }
+ 
+-                    boolean shouldGrantNormalPermission = true;
+-                    if (bp.isNormal() && !origState.isPermissionGranted(perm)) {
+-                        // If this is an existing, non-system package, then
+-                        // we can't add any new permissions to it. Runtime
+-                        // permissions can be added any time - they are dynamic.
+-                        if (!ps.isSystem() && userState.areInstallPermissionsFixed(
+-                                ps.getPackageName())) {
+-                            // Except...  if this is a permission that was added
+-                            // to the platform (note: need to only do this when
+-                            // updating the platform).
+-                            if (!isCompatPlatformPermissionForPackage(perm, pkg)) {
+-                                shouldGrantNormalPermission = false;
+-                            }
+-                        }
+-                    }
+-
+                     if (DEBUG_PERMISSIONS) {
+                         Slog.i(TAG, "Considering granting permission " + perm + " to package "
+                                 + pkg.getPackageName());
+                     }
+ 
+                     if (bp.isNormal() || bp.isSignature() || bp.isInternal()) {
+-                        if ((bp.isNormal() && shouldGrantNormalPermission)
++                        if (bp.isNormal()
+                                 || (bp.isSignature()
+                                         && (!bp.isPrivileged() || CollectionUtils.contains(
+                                                 isPrivilegedPermissionAllowlisted, permName))
+-- 
+2.34.1
+

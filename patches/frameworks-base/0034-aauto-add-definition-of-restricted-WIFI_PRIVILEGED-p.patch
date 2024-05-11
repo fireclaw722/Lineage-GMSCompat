@@ -1,0 +1,41 @@
+From 4b91e7f6d4c47183ee76164154f6e8263c56ee36 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 18 Dec 2023 16:57:56 +0200
+Subject: [PATCH 34/45] aauto: add definition of restricted WIFI_PRIVILEGED
+ permission
+
+---
+ core/api/system-current.txt  | 1 +
+ core/res/AndroidManifest.xml | 4 ++++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/core/api/system-current.txt b/core/api/system-current.txt
+index 78fe62e458fe..67b36d40dfe6 100644
+--- a/core/api/system-current.txt
++++ b/core/api/system-current.txt
+@@ -393,6 +393,7 @@ package android {
+     field public static final String WHITELIST_AUTO_REVOKE_PERMISSIONS = "android.permission.WHITELIST_AUTO_REVOKE_PERMISSIONS";
+     field public static final String WHITELIST_RESTRICTED_PERMISSIONS = "android.permission.WHITELIST_RESTRICTED_PERMISSIONS";
+     field public static final String WIFI_ACCESS_COEX_UNSAFE_CHANNELS = "android.permission.WIFI_ACCESS_COEX_UNSAFE_CHANNELS";
++    field public static final String WIFI_PRIVILEGED_ANDROID_AUTO = "android.permission.WIFI_PRIVILEGED_ANDROID_AUTO";
+     field public static final String WIFI_SET_DEVICE_MOBILITY_STATE = "android.permission.WIFI_SET_DEVICE_MOBILITY_STATE";
+     field public static final String WIFI_UPDATE_COEX_UNSAFE_CHANNELS = "android.permission.WIFI_UPDATE_COEX_UNSAFE_CHANNELS";
+     field public static final String WIFI_UPDATE_USABILITY_STATS_SCORE = "android.permission.WIFI_UPDATE_USABILITY_STATS_SCORE";
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index 8053608525b8..25f5fcc9ec5f 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -2104,6 +2104,10 @@
+                 android:protectionLevel="signature|privileged|knownSigner"
+                 android:knownCerts="@array/wifi_known_signers" />
+ 
++    <!--- @SystemApi @hide -->
++    <permission android:name="android.permission.WIFI_PRIVILEGED_ANDROID_AUTO"
++                android:protectionLevel="internal" />
++
+     <!-- @SystemApi @hide Allows apps to create and manage IPsec tunnels.
+          <p>Only granted to applications that are currently bound by the
+          system for creating and managing IPsec-based interfaces.
+-- 
+2.34.1
+

@@ -1,0 +1,26 @@
+From 487f4ef4111cda96b64743f9bad95ac7fd192e16 Mon Sep 17 00:00:00 2001
+From: Builder <admin@ceruleanfire.com>
+Date: Tue, 7 May 2024 01:11:20 +0000
+Subject: [PATCH 01/44] Allow Signature-Spoofing on non-debugging builds
+
+Change-Id: I00f52ece2741feb7b4635f638e2ee2bcfe2f8fbf
+---
+ services/core/java/com/android/server/pm/ComputerEngine.java | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/pm/ComputerEngine.java b/services/core/java/com/android/server/pm/ComputerEngine.java
+index d8cbe9d5e7c7..f86c78e45e78 100644
+--- a/services/core/java/com/android/server/pm/ComputerEngine.java
++++ b/services/core/java/com/android/server/pm/ComputerEngine.java
+@@ -1473,7 +1473,7 @@ public class ComputerEngine implements Computer {
+ 
+     public static boolean isMicrogSigned(AndroidPackage p) {
+         if (!isDebuggable()) {
+-            return false;
++            //return false;
+         }
+ 
+         // Allowlist the following apps:
+-- 
+2.34.1
+

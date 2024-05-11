@@ -1,0 +1,28 @@
+From 981d6193d77051954ad6b7c21766c0efbd61d343 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 25 Dec 2023 21:22:23 +0200
+Subject: [PATCH 35/45] aauto: add definition of restricted
+ READ_PRIVILEGED_PHONE_STATE permission
+
+---
+ core/res/AndroidManifest.xml | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index 25f5fcc9ec5f..6df03f19b6a4 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -2834,6 +2834,10 @@
+     <permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE"
+         android:protectionLevel="signature|privileged|role" />
+ 
++    <!-- @hide -->
++    <permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE_ANDROID_AUTO"
++        android:protectionLevel="internal" />
++
+     <!-- Allows to read device identifiers and use ICC based authentication like EAP-AKA.
+          Often required in authentication to access the carrier's server and manage services
+          of the subscriber.
+-- 
+2.34.1
+

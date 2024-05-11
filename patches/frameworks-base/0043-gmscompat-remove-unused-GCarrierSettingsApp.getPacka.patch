@@ -1,0 +1,38 @@
+From 4d614d90a4103a3753d80098c7a5cddab0d79bb5 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 11 Mar 2024 13:56:03 +0200
+Subject: [PATCH 43/45] gmscompat: remove unused
+ GCarrierSettingsApp.getPackageSpec() method
+
+---
+ .../gmscompat/gcarriersettings/GCarrierSettingsApp.java    | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/core/java/com/android/internal/gmscompat/gcarriersettings/GCarrierSettingsApp.java b/core/java/com/android/internal/gmscompat/gcarriersettings/GCarrierSettingsApp.java
+index 9c69cbaf1d64..663c93af576e 100644
+--- a/core/java/com/android/internal/gmscompat/gcarriersettings/GCarrierSettingsApp.java
++++ b/core/java/com/android/internal/gmscompat/gcarriersettings/GCarrierSettingsApp.java
+@@ -4,8 +4,6 @@ import android.content.Context;
+ import android.service.carrier.CarrierIdentifier;
+ import android.telephony.TelephonyManager;
+ 
+-import com.android.internal.util.PackageSpec;
+-
+ import java.util.Objects;
+ 
+ // A set of hooks that are needed to obtain output of Google's CarrierSettings app for arbitrary
+@@ -27,11 +25,6 @@ public class GCarrierSettingsApp {
+         carrierIdOverride = new ThreadLocal<>();
+     }
+ 
+-    public static PackageSpec getPackageSpec() {
+-        return new PackageSpec(PKG_NAME, 37L,
+-                new String[] { "c00409b6524658c2e8eb48975a5952959ea3707dd57bc50fd74d6249262f0e82" });
+-    }
+-
+     public static int maybeOverrideSlotIndex(int subId) {
+         if (subId == SUB_ID_FOR_CARRIER_ID_OVERRIDE) {
+             return PHONE_SLOT_IDX_FOR_CARRIER_ID_OVERRIDE;
+-- 
+2.34.1
+

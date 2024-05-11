@@ -1,0 +1,206 @@
+From a0dabd76da04b8afa8df2ab108e541123b696adb Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Tue, 16 May 2023 14:27:15 +0300
+Subject: [PATCH 09/44] AppBindArgs: infrastructure for passing extra args to
+ app process init
+
+---
+ core/java/android/app/ActivityThread.java     |  5 +++
+ .../java/android/app/ActivityThreadHooks.java | 41 +++++++++++++++++++
+ core/java/android/app/AppBindArgs.java        |  8 ++++
+ .../android/content/pm/IPackageManager.aidl   |  2 +
+ .../server/ext/PackageManagerHooks.java       | 41 +++++++++++++++++++
+ .../server/pm/PackageManagerService.java      |  7 ++++
+ 6 files changed, 104 insertions(+)
+ create mode 100644 core/java/android/app/AppBindArgs.java
+
+diff --git a/core/java/android/app/ActivityThread.java b/core/java/android/app/ActivityThread.java
+index 4fb1a3998489..c36dcb482c7c 100644
+--- a/core/java/android/app/ActivityThread.java
++++ b/core/java/android/app/ActivityThread.java
+@@ -7191,6 +7191,7 @@ public final class ActivityThread extends ClientTransactionHandler
+         final IActivityManager mgr = ActivityManager.getService();
+         final ContextImpl appContext = ContextImpl.createAppContext(this, data.info);
+         mConfigurationController.updateLocaleListFromAppContext(appContext);
++        final Bundle extraAppBindArgs = ActivityThreadHooks.onBind(appContext);
+ 
+         // Initialize the default http proxy in this process.
+         Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "Setup proxies");
+@@ -7250,6 +7251,10 @@ public final class ActivityThread extends ClientTransactionHandler
+             dalvik.system.VMRuntime.getRuntime().clampGrowthLimit();
+         }
+ 
++        if (extraAppBindArgs != null) {
++            ActivityThreadHooks.onBind2(appContext, extraAppBindArgs);
++        }
++
+         // Allow disk access during application and provider setup. This could
+         // block processing ordered broadcasts, but later processing would
+         // probably end up doing the same disk access.
+diff --git a/core/java/android/app/ActivityThreadHooks.java b/core/java/android/app/ActivityThreadHooks.java
+index 95342db6f7a9..6df2ce428d2c 100644
+--- a/core/java/android/app/ActivityThreadHooks.java
++++ b/core/java/android/app/ActivityThreadHooks.java
+@@ -10,6 +10,47 @@ import java.util.Objects;
+ 
+ class ActivityThreadHooks {
+ 
++    private static volatile boolean called;
++
++    // called after the initial app context is constructed
++    // ActivityThread.handleBindApplication
++    static Bundle onBind(Context appContext) {
++        if (called) {
++            throw new IllegalStateException("onBind called for the second time");
++        }
++        called = true;
++
++        if (Process.isIsolated()) {
++            return null;
++        }
++
++        final String pkgName = appContext.getPackageName();
++        final String TAG = "AppBindArgs";
++
++        Bundle args = null;
++        try {
++            args = ActivityThread.getPackageManager().getExtraAppBindArgs(pkgName);
++        } catch (RemoteException e) {
++            Log.e(TAG, "", e);
++        }
++
++        if (args == null) {
++            Log.e(TAG, "bundle is null");
++            return null;
++        }
++
++        int[] flags = Objects.requireNonNull(args.getIntArray(AppBindArgs.KEY_FLAGS_ARRAY));
++
++        return args;
++    }
++
++    // called after ActivityThread instrumentation is inited, which happens before execution of any
++    // of app's code
++    // ActivityThread.handleBindApplication
++    static void onBind2(Context appContext, Bundle appBindArgs) {
++
++    }
++
+     static Service instantiateService(String className) {
+         Service res = null;
+         return res;
+diff --git a/core/java/android/app/AppBindArgs.java b/core/java/android/app/AppBindArgs.java
+new file mode 100644
+index 000000000000..bd411cd4232a
+--- /dev/null
++++ b/core/java/android/app/AppBindArgs.java
+@@ -0,0 +1,8 @@
++package android.app;
++
++/** @hide */
++public interface AppBindArgs {
++    String KEY_FLAGS_ARRAY = "flagsArr";
++
++    int FLAGS_ARRAY_LEN = 10;
++}
+diff --git a/core/java/android/content/pm/IPackageManager.aidl b/core/java/android/content/pm/IPackageManager.aidl
+index 6dc8d4738c87..b2db31cc522d 100644
+--- a/core/java/android/content/pm/IPackageManager.aidl
++++ b/core/java/android/content/pm/IPackageManager.aidl
+@@ -843,4 +843,6 @@ interface IPackageManager {
+     Bitmap getArchivedAppIcon(String packageName, in UserHandle user);
+ 
+     boolean isAppArchivable(String packageName, in UserHandle user);
++
++    @nullable Bundle getExtraAppBindArgs(String packageName);
+ }
+diff --git a/services/core/java/com/android/server/ext/PackageManagerHooks.java b/services/core/java/com/android/server/ext/PackageManagerHooks.java
+index cb5038687b6f..4a64a408ad6a 100644
+--- a/services/core/java/com/android/server/ext/PackageManagerHooks.java
++++ b/services/core/java/com/android/server/ext/PackageManagerHooks.java
+@@ -3,9 +3,18 @@ package com.android.server.ext;
+ import android.Manifest;
+ import android.annotation.Nullable;
+ import android.annotation.UserIdInt;
++import android.app.AppBindArgs;
++import android.content.pm.PackageManager;
+ import android.content.pm.PackageManagerInternal;
++import android.os.Binder;
++import android.os.Build;
++import android.os.Bundle;
++import android.os.UserHandle;
+ import android.util.ArraySet;
+ 
++import com.android.server.pm.PackageManagerService;
++import com.android.server.pm.permission.Permission;
++import com.android.server.pm.pkg.AndroidPackage;
+ import com.android.server.pm.pkg.PackageStateInternal;
+ import com.android.server.pm.pkg.parsing.ParsingPackage;
+ 
+@@ -26,6 +35,38 @@ public class PackageManagerHooks {
+         return false;
+     }
+ 
++    @Nullable
++    public static Bundle getExtraAppBindArgs(PackageManagerService pm, String packageName) {
++        final int callingUid = Binder.getCallingUid();
++        final int appId = UserHandle.getAppId(callingUid);
++        final int userId = UserHandle.getUserId(callingUid);
++
++        PackageStateInternal pkgState = pm.snapshotComputer().getPackageStateInternal(packageName);
++        if (pkgState == null) {
++            return null;
++        }
++
++        if (pkgState.getAppId() != appId) {
++            return null;
++        }
++
++        AndroidPackage pkg = pkgState.getPkg();
++
++        if (pkg == null) {
++            return null;
++        }
++
++        // isSystem() remains true even if isUpdatedSystemApp() is true
++        final boolean isUserApp = !pkgState.isSystem();
++
++        int[] flagsArr = new int[AppBindArgs.FLAGS_ARRAY_LEN];
++
++        var b = new Bundle();
++        b.putIntArray(AppBindArgs.KEY_FLAGS_ARRAY, flagsArr);
++
++        return b;
++    }
++
+     // Called when AppsFilter decides whether to restrict package visibility
+     public static boolean shouldFilterApplication(
+             @Nullable PackageStateInternal callingPkgSetting,
+diff --git a/services/core/java/com/android/server/pm/PackageManagerService.java b/services/core/java/com/android/server/pm/PackageManagerService.java
+index 7798790c1026..11fe701b54bb 100644
+--- a/services/core/java/com/android/server/pm/PackageManagerService.java
++++ b/services/core/java/com/android/server/pm/PackageManagerService.java
+@@ -213,6 +213,7 @@ import com.android.server.art.DexUseManagerLocal;
+ import com.android.server.art.model.DeleteResult;
+ import com.android.server.compat.CompatChange;
+ import com.android.server.compat.PlatformCompat;
++import com.android.server.ext.PackageManagerHooks;
+ import com.android.server.pm.Installer.InstallerException;
+ import com.android.server.pm.Installer.LegacyDexoptDisabledException;
+ import com.android.server.pm.Settings.VersionInfo;
+@@ -6535,6 +6536,12 @@ public class PackageManagerService implements PackageSender, TestUtilityService
+                     getPerUidReadTimeouts(snapshot), mSnapshotStatistics
+             ).doDump(snapshot, fd, pw, args);
+         }
++
++        @Nullable
++        @Override
++        public Bundle getExtraAppBindArgs(String packageName) {
++            return PackageManagerHooks.getExtraAppBindArgs(PackageManagerService.this, packageName);
++        }
+     }
+ 
+     private class PackageManagerInternalImpl extends PackageManagerInternalBase {
+-- 
+2.34.1
+

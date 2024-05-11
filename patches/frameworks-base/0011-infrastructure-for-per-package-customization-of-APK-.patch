@@ -1,0 +1,255 @@
+From 29b1c8553e67269126b691da8cd7ae2cc5460438 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Wed, 20 Dec 2023 13:04:44 +0200
+Subject: [PATCH 11/44] infrastructure for per-package customization of APK
+ parser
+
+---
+ .../internal/pm/parsing/pkg/PackageImpl.java  | 12 ++++
+ .../pm/pkg/component/ParsedServiceUtils.java  |  2 +
+ .../pm/pkg/parsing/ParsingPackage.java        |  6 ++
+ .../pm/pkg/parsing/ParsingPackageUtils.java   | 48 +++++++++++++-
+ .../server/pm/ext/PackageHooksRegistry.java   | 14 ++++
+ .../server/pm/ext/PackageParsingHooks.java    | 66 +++++++++++++++++++
+ 6 files changed, 146 insertions(+), 2 deletions(-)
+ create mode 100644 services/core/java/com/android/server/pm/ext/PackageHooksRegistry.java
+ create mode 100644 services/core/java/com/android/server/pm/ext/PackageParsingHooks.java
+
+diff --git a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+index f7e1f7293ac6..6545e0c2ab7f 100644
+--- a/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
++++ b/core/java/com/android/internal/pm/parsing/pkg/PackageImpl.java
+@@ -3785,4 +3785,16 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
+         private static final long APEX = 1L << 1;
+         private static final long UPDATABLE_SYSTEM = 1L << 2;
+     }
++
++    private com.android.server.pm.ext.PackageParsingHooks packageParsingHooks;
++
++    @Override
++    public void initPackageParsingHooks() {
++        packageParsingHooks = com.android.server.pm.ext.PackageHooksRegistry.getParsingHooks(getPackageName());
++    }
++
++    @Override
++    public com.android.server.pm.ext.PackageParsingHooks getPackageParsingHooks() {
++        return packageParsingHooks;
++    }
+ }
+diff --git a/core/java/com/android/internal/pm/pkg/component/ParsedServiceUtils.java b/core/java/com/android/internal/pm/pkg/component/ParsedServiceUtils.java
+index a1dd19a3bc90..1bb4ce3f15ee 100644
+--- a/core/java/com/android/internal/pm/pkg/component/ParsedServiceUtils.java
++++ b/core/java/com/android/internal/pm/pkg/component/ParsedServiceUtils.java
+@@ -180,6 +180,8 @@ public class ParsedServiceUtils {
+             service.setExported(hasIntentFilters);
+         }
+ 
++        pkg.getPackageParsingHooks().amendParsedService(service);
++
+         return input.success(service);
+     }
+ }
+diff --git a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
+index 6c09b7c04fa7..1775970eb504 100644
+--- a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
++++ b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackage.java
+@@ -540,4 +540,10 @@ public interface ParsingPackage {
+     boolean isNormalScreensSupported();
+ 
+     boolean isSmallScreensSupported();
++
++    boolean isPartiallyDirectBootAware();
++
++    void initPackageParsingHooks();
++
++    com.android.server.pm.ext.PackageParsingHooks getPackageParsingHooks();
+ }
+diff --git a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
+index dbe4fba5dfdb..b9c2768830f9 100644
+--- a/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
++++ b/core/java/com/android/internal/pm/pkg/parsing/ParsingPackageUtils.java
+@@ -721,6 +721,7 @@ public class ParsingPackageUtils {
+                     "coreApp", false);
+             final ParsingPackage pkg = mCallback.startParsingPackage(
+                     pkgName, apkPath, codePath, manifestArray, isCoreApp);
++            pkg.initPackageParsingHooks();
+             final ParseResult<ParsingPackage> result =
+                     parseBaseApkTags(input, pkg, manifestArray, res, parser, flags,
+                             shouldSkipComponents);
+@@ -1041,6 +1042,27 @@ public class ParsingPackageUtils {
+             );
+         }
+ 
++        List<ParsedUsesPermission> usesPermsList = pkg.getUsesPermissions();
++        var usesPerms = new java.util.HashSet<String>(usesPermsList.size() + 10);
++        for (ParsedUsesPermission p : usesPermsList) {
++            usesPerms.add(p.getName());
++        }
++
++        List<ParsedUsesPermissionImpl> extraUsesPerms = pkg.getPackageParsingHooks().addUsesPermissions();
++
++        if (extraUsesPerms != null) {
++            for (ParsedUsesPermission p : extraUsesPerms) {
++                String name = p.getName();
++                if (!usesPerms.add(name)) {
++                    Slog.w(TAG, "PackageParsingHooks.addUsesPermissions() " +
++                            "tried to add duplicate uses-permission " + name
++                            + " to pkg " + pkg.getPackageName());
++                    continue;
++                }
++                pkg.addUsesPermission(p);
++            }
++        }
++
+         convertCompatPermissions(pkg);
+ 
+         convertSplitPermissions(pkg);
+@@ -1323,7 +1345,9 @@ public class ParsingPackageUtils {
+         }
+         ParsedPermission permission = result.getResult();
+         if (permission != null) {
+-            pkg.addPermission(permission);
++            if (!pkg.getPackageParsingHooks().shouldSkipPermissionDefinition(permission)) {
++                pkg.addPermission(permission);
++            }
+         }
+         return input.success(pkg);
+     }
+@@ -1483,7 +1507,10 @@ public class ParsingPackageUtils {
+             }
+ 
+             if (!found) {
+-                pkg.addUsesPermission(new ParsedUsesPermissionImpl(name, usesPermissionFlags));
++                var p = new ParsedUsesPermissionImpl(name, usesPermissionFlags);
++                if (!pkg.getPackageParsingHooks().shouldSkipUsesPermission(p)) {
++                    pkg.addUsesPermission(p);
++                }
+             }
+             return success;
+         } finally {
+@@ -2304,6 +2331,15 @@ public class ParsingPackageUtils {
+         if (hasReceiverOrder) {
+             pkg.sortReceivers();
+         }
++
++        List<ParsedService> extraServices = pkg.getPackageParsingHooks().addServices(pkg);
++        if (extraServices != null) {
++            for (var s : extraServices) {
++                hasServiceOrder |= (s.getOrder() != 0);
++                pkg.addService(s);
++            }
++        }
++
+         if (hasServiceOrder) {
+             pkg.sortServices();
+         }
+@@ -2399,6 +2435,14 @@ public class ParsingPackageUtils {
+                 .setPermission(nonConfigString(0, R.styleable.AndroidManifestApplication_permission, sa));
+         // CHECKSTYLE:on
+         //@formatter:on
++
++        var hooks = pkg.getPackageParsingHooks();
++        int enabledOverride = hooks.overrideDefaultPackageEnabledState();
++        if (enabledOverride == PackageManager.COMPONENT_ENABLED_STATE_DISABLED) {
++            pkg.setEnabled(false);
++        } else if (enabledOverride == PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
++            pkg.setEnabled(true);
++        }
+     }
+ 
+     /**
+diff --git a/services/core/java/com/android/server/pm/ext/PackageHooksRegistry.java b/services/core/java/com/android/server/pm/ext/PackageHooksRegistry.java
+new file mode 100644
+index 000000000000..b720e2edbca7
+--- /dev/null
++++ b/services/core/java/com/android/server/pm/ext/PackageHooksRegistry.java
+@@ -0,0 +1,14 @@
++package com.android.server.pm.ext;
++
++import android.ext.PackageId;
++
++import com.android.internal.pm.pkg.parsing.PackageParsingHooks;
++
++public class PackageHooksRegistry {
++
++    public static PackageParsingHooks getParsingHooks(String pkgName) {
++        return switch (pkgName) {
++            default -> PackageParsingHooks.DEFAULT;
++        };
++    }
++}
+diff --git a/services/core/java/com/android/server/pm/ext/PackageParsingHooks.java b/services/core/java/com/android/server/pm/ext/PackageParsingHooks.java
+new file mode 100644
+index 000000000000..ca0565f920d0
+--- /dev/null
++++ b/services/core/java/com/android/server/pm/ext/PackageParsingHooks.java
+@@ -0,0 +1,66 @@
++package com.android.server.pm.ext;
++
++import android.annotation.Nullable;
++import android.content.pm.PackageManager;
++
++import com.android.server.pm.pkg.component.ParsedPermission;
++import com.android.server.pm.pkg.component.ParsedService;
++import com.android.server.pm.pkg.component.ParsedServiceImpl;
++import com.android.server.pm.pkg.component.ParsedUsesPermission;
++import com.android.server.pm.pkg.component.ParsedUsesPermissionImpl;
++import com.android.server.pm.pkg.parsing.ParsingPackage;
++
++import java.util.ArrayList;
++import java.util.List;
++
++public class PackageParsingHooks {
++    public static final PackageParsingHooks DEFAULT = new PackageParsingHooks();
++
++    public boolean shouldSkipPermissionDefinition(ParsedPermission p) {
++        return false;
++    }
++
++    public boolean shouldSkipUsesPermission(ParsedUsesPermission p) {
++        return false;
++    }
++
++    @Nullable
++    public List<ParsedUsesPermissionImpl> addUsesPermissions() {
++        return null;
++    }
++
++    protected static List<ParsedUsesPermissionImpl> createUsesPerms(String... perms) {
++        int l = perms.length;
++        var res = new ArrayList<ParsedUsesPermissionImpl>(l);
++        for (int i = 0; i < l; ++i) {
++            res.add(new ParsedUsesPermissionImpl(perms[i], 0));
++        }
++        return res;
++    }
++
++    public void amendParsedService(ParsedServiceImpl s) {
++
++    }
++
++    public List<ParsedService> addServices(ParsingPackage pkg) {
++        return null;
++    }
++
++    // supported return values:
++    // PackageManager.COMPONENT_ENABLED_STATE_DISABLED
++    // PackageManager.COMPONENT_ENABLED_STATE_ENABLED
++    // PackageManager.COMPONENT_ENABLED_STATE_DEFAULT (skip override)
++    public int overrideDefaultPackageEnabledState() {
++        return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
++    }
++
++    public static ParsedServiceImpl createService(ParsingPackage pkg, String className) {
++        var s = new ParsedServiceImpl();
++        s.setPackageName(pkg.getPackageName());
++        s.setName(className);
++        s.setProcessName(pkg.getProcessName());
++        s.setDirectBootAware(pkg.isPartiallyDirectBootAware());
++        s.setExported(true);
++        return s;
++    }
++}
+-- 
+2.34.1
+

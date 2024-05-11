@@ -1,0 +1,56 @@
+From bfba1baccf32ce83ee480325f3831cc97cda0d57 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Wed, 24 Jan 2024 19:34:51 +0200
+Subject: [PATCH 19/45] add PackageId of the first loaded APK to AppGlobals
+
+---
+ core/java/android/app/ActivityThreadHooks.java |  2 ++
+ core/java/android/app/AppGlobals.java          | 12 ++++++++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/core/java/android/app/ActivityThreadHooks.java b/core/java/android/app/ActivityThreadHooks.java
+index 6df2ce428d2c..cbec05808c88 100644
+--- a/core/java/android/app/ActivityThreadHooks.java
++++ b/core/java/android/app/ActivityThreadHooks.java
+@@ -20,6 +20,8 @@ class ActivityThreadHooks {
+         }
+         called = true;
+ 
++        AppGlobals.setInitialPackageId(appContext.getApplicationInfo().ext().getPackageId());
++
+         if (Process.isIsolated()) {
+             return null;
+         }
+diff --git a/core/java/android/app/AppGlobals.java b/core/java/android/app/AppGlobals.java
+index f66bf0d89c37..3a70e8f03f3a 100644
+--- a/core/java/android/app/AppGlobals.java
++++ b/core/java/android/app/AppGlobals.java
+@@ -18,6 +18,7 @@ package android.app;
+ 
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.pm.IPackageManager;
++import android.ext.PackageId;
+ import android.permission.IPermissionManager;
+ 
+ /**
+@@ -43,6 +44,17 @@ public class AppGlobals {
+         return ActivityThread.currentPackageName();
+     }
+ 
++    private static int initialPackageId = PackageId.UNKNOWN;
++
++    public static void setInitialPackageId(int value) {
++        initialPackageId = value;
++    }
++
++    // PackageId of the first APK loaded into the process
++    public static int getInitialPackageId() {
++        return initialPackageId;
++    }
++
+     /**
+      * Return the raw interface to the package manager.
+      * @return The package manager.
+-- 
+2.34.1
+

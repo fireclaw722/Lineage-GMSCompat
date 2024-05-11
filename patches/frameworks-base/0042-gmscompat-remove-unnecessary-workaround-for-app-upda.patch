@@ -1,0 +1,107 @@
+From a8477439461a4e7cb3796b4b3be8d9413b645865 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 11 Mar 2024 13:49:21 +0200
+Subject: [PATCH 42/45] gmscompat: remove unnecessary workaround for app
+ updates via Play Store
+
+getSilentUpdateWaitMillis() workaround was added to make Play Store wait before committing
+PackageInstaller session if doing so would require confirmation due to throttling of multiple
+package updates by same installer. This throttling is applied per [app, installer] pair.
+
+The assumption was that app updates require confirmation in some cases due to this throttling,
+which was incorrect, it was caused by a bug in APK parser.
+---
+ .../content/pm/IPackageInstallerSession.aidl     |  2 --
+ .../android/content/pm/PackageInstaller.java     | 16 ----------------
+ .../server/pm/PackageInstallerSession.java       |  5 -----
+ .../android/server/pm/SilentUpdatePolicy.java    | 15 ---------------
+ 4 files changed, 38 deletions(-)
+
+diff --git a/core/java/android/content/pm/IPackageInstallerSession.aidl b/core/java/android/content/pm/IPackageInstallerSession.aidl
+index 697510fd4743..ea69a2b178dd 100644
+--- a/core/java/android/content/pm/IPackageInstallerSession.aidl
++++ b/core/java/android/content/pm/IPackageInstallerSession.aidl
+@@ -73,6 +73,4 @@ interface IPackageInstallerSession {
+     ParcelFileDescriptor getAppMetadataFd();
+     ParcelFileDescriptor openWriteAppMetadata();
+     void removeAppMetadata();
+-
+-    long getSilentUpdateWaitMillis();
+ }
+diff --git a/core/java/android/content/pm/PackageInstaller.java b/core/java/android/content/pm/PackageInstaller.java
+index d6bb031e0b60..90cc430d038c 100644
+--- a/core/java/android/content/pm/PackageInstaller.java
++++ b/core/java/android/content/pm/PackageInstaller.java
+@@ -1969,22 +1969,6 @@ public class PackageInstaller {
+          */
+         public void commit(@NonNull IntentSender statusReceiver) {
+             if (GmsCompat.isPlayStore()) {
+-                long waitMs = 0;
+-                try {
+-                    waitMs = mSession.getSilentUpdateWaitMillis();
+-                } catch (Exception e) {
+-                    // getSilentUpdateWaitMillis() will fail if Play Store didn't set packageName
+-                    // of this session. It always does currently AFAIK (September 2022)
+-                    Log.e("GmsCompat", "", e);
+-                }
+-
+-                if (waitMs > 0) {
+-                    // Should happen only if the same package is updated twice within 30 seconds
+-                    // (likely a Play Store bug, possibly related to APK splits)
+-                    Log.d("GmsCompat", "PackageInstaller.Session.getSilentUpdateWaitMillis returned " + waitMs + ", sleeping...");
+-                    SystemClock.sleep(waitMs + 100);
+-                }
+-
+                 statusReceiver = PlayStoreHooks.wrapCommitStatusReceiver(this, statusReceiver);
+             }
+ 
+diff --git a/services/core/java/com/android/server/pm/PackageInstallerSession.java b/services/core/java/com/android/server/pm/PackageInstallerSession.java
+index 19bf17e0939c..43b97c1fb783 100644
+--- a/services/core/java/com/android/server/pm/PackageInstallerSession.java
++++ b/services/core/java/com/android/server/pm/PackageInstallerSession.java
+@@ -5775,9 +5775,4 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
+                 childSessionIdsArray, parentSessionId, isReady, isFailed, isApplied,
+                 sessionErrorCode, sessionErrorMessage);
+     }
+-
+-    @Override
+-    public long getSilentUpdateWaitMillis() {
+-        return mSilentUpdatePolicy.getSilentUpdateWaitMillis(this);
+-    }
+ }
+diff --git a/services/core/java/com/android/server/pm/SilentUpdatePolicy.java b/services/core/java/com/android/server/pm/SilentUpdatePolicy.java
+index 2662c47619b9..700f72cfbb94 100644
+--- a/services/core/java/com/android/server/pm/SilentUpdatePolicy.java
++++ b/services/core/java/com/android/server/pm/SilentUpdatePolicy.java
+@@ -25,7 +25,6 @@ import android.util.Pair;
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.util.IndentingPrintWriter;
+ 
+-import java.util.Objects;
+ import java.util.concurrent.TimeUnit;
+ 
+ /**
+@@ -70,20 +69,6 @@ public class SilentUpdatePolicy {
+         return SystemClock.uptimeMillis() - lastSilentUpdatedMs > throttleTimeMs;
+     }
+ 
+-    long getSilentUpdateWaitMillis(@NonNull PackageInstallerSession session) {
+-        final long lastSilentUpdatedMs = getTimestampMs(
+-                Objects.requireNonNull(session.getInstallerPackageName()),
+-                Objects.requireNonNull(session.params.appPackageName));
+-        if (lastSilentUpdatedMs < 0) {
+-            return 0L;
+-        }
+-        final long throttleTimeMs;
+-        synchronized (mSilentUpdateInfos) {
+-            throttleTimeMs = mSilentUpdateThrottleTimeMs;
+-        }
+-        return Math.max(0, throttleTimeMs - (SystemClock.uptimeMillis() - lastSilentUpdatedMs));
+-    }
+-
+     /**
+      * Adding track for the installer package name and installing app of a silent update. This is
+      * used to determine whether a silent update is allowed.
+-- 
+2.34.1
+

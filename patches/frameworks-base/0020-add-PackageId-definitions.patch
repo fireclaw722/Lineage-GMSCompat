@@ -1,0 +1,126 @@
+From a6122f71b0e29699c20d3ee7ab62bb26b0f25192 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Wed, 27 Dec 2023 12:10:37 +0200
+Subject: [PATCH 20/45] add PackageId definitions
+
+---
+ core/api/system-current.txt                   | 20 +++++++++++++
+ core/java/android/ext/PackageId.java          | 30 +++++++++++++++++++
+ .../android/server/pm/ext/PackageExtInit.java | 26 ++++++++++++++++
+ 3 files changed, 76 insertions(+)
+
+diff --git a/core/api/system-current.txt b/core/api/system-current.txt
+index 67225c33efd7..2848bdd3e03f 100644
+--- a/core/api/system-current.txt
++++ b/core/api/system-current.txt
+@@ -4360,6 +4360,26 @@ package android.debug {
+ package android.ext {
+ 
+   public interface PackageId {
++    field public static final int ANDROID_AUTO = 10; // 0xa
++    field public static final String ANDROID_AUTO_NAME = "com.google.android.projection.gearhead";
++    field public static final int EUICC_SUPPORT_PIXEL = 5; // 0x5
++    field public static final String EUICC_SUPPORT_PIXEL_NAME = "com.google.euiccpixel";
++    field public static final int GMS_CORE = 2; // 0x2
++    field public static final String GMS_CORE_NAME = "com.google.android.gms";
++    field public static final int GSF = 1; // 0x1
++    field public static final String GSF_NAME = "com.google.android.gsf";
++    field public static final int G_CAMERA = 8; // 0x8
++    field public static final String G_CAMERA_NAME = "com.google.android.GoogleCamera";
++    field public static final int G_CARRIER_SETTINGS = 7; // 0x7
++    field public static final String G_CARRIER_SETTINGS_NAME = "com.google.android.carrier";
++    field public static final int G_EUICC_LPA = 6; // 0x6
++    field public static final String G_EUICC_LPA_NAME = "com.google.android.euicc";
++    field public static final int G_SEARCH_APP = 4; // 0x4
++    field public static final String G_SEARCH_APP_NAME = "com.google.android.googlequicksearchbox";
++    field public static final int PIXEL_CAMERA_SERVICES = 9; // 0x9
++    field public static final String PIXEL_CAMERA_SERVICES_NAME = "com.google.android.apps.camera.services";
++    field public static final int PLAY_STORE = 3; // 0x3
++    field public static final String PLAY_STORE_NAME = "com.android.vending";
+     field public static final int UNKNOWN = 0; // 0x0
+   }
+ 
+diff --git a/core/java/android/ext/PackageId.java b/core/java/android/ext/PackageId.java
+index 735eb115a099..0e6b9606de03 100644
+--- a/core/java/android/ext/PackageId.java
++++ b/core/java/android/ext/PackageId.java
+@@ -11,4 +11,34 @@ import android.annotation.SystemApi;
+ // or by a check that the APK is stored on an immutable OS partition.
+ public interface PackageId {
+     int UNKNOWN = 0;
++
++    String GSF_NAME = "com.google.android.gsf";
++    int GSF = 1;
++
++    String GMS_CORE_NAME = "com.google.android.gms";
++    int GMS_CORE = 2;
++
++    String PLAY_STORE_NAME = "com.android.vending";
++    int PLAY_STORE = 3;
++
++    String G_SEARCH_APP_NAME = "com.google.android.googlequicksearchbox";
++    int G_SEARCH_APP = 4;
++
++    String EUICC_SUPPORT_PIXEL_NAME = "com.google.euiccpixel";
++    int EUICC_SUPPORT_PIXEL = 5;
++
++    String G_EUICC_LPA_NAME = "com.google.android.euicc";
++    int G_EUICC_LPA = 6;
++
++    String G_CARRIER_SETTINGS_NAME = "com.google.android.carrier";
++    int G_CARRIER_SETTINGS = 7;
++
++    String G_CAMERA_NAME = "com.google.android.GoogleCamera";
++    int G_CAMERA = 8;
++
++    String PIXEL_CAMERA_SERVICES_NAME = "com.google.android.apps.camera.services";
++    int PIXEL_CAMERA_SERVICES = 9;
++
++    String ANDROID_AUTO_NAME = "com.google.android.projection.gearhead";
++    int ANDROID_AUTO = 10;
+ }
+diff --git a/services/core/java/com/android/server/pm/ext/PackageExtInit.java b/services/core/java/com/android/server/pm/ext/PackageExtInit.java
+index f99c63eb665e..87465541c4c4 100644
+--- a/services/core/java/com/android/server/pm/ext/PackageExtInit.java
++++ b/services/core/java/com/android/server/pm/ext/PackageExtInit.java
+@@ -64,11 +64,37 @@ public class PackageExtInit {
+ 
+     private int getPackageId() {
+         return switch (pkg.getPackageName()) {
++            case GSF_NAME -> validate(GSF, 30L, mainGmsCerts());
++            case GMS_CORE_NAME -> validate(GMS_CORE, 21_00_00_000L, mainGmsCerts());
++            case PLAY_STORE_NAME -> validate(PLAY_STORE, 0L, mainGmsCerts());
++            case G_SEARCH_APP_NAME -> validate(G_SEARCH_APP, 0L, mainGmsCerts());
++            case EUICC_SUPPORT_PIXEL_NAME -> validateSystemPkg(EUICC_SUPPORT_PIXEL);
++            case G_EUICC_LPA_NAME -> validateSystemPkg(G_EUICC_LPA);
++            case G_CARRIER_SETTINGS_NAME -> validate(G_CARRIER_SETTINGS, 37L,
++                    "c00409b6524658c2e8eb48975a5952959ea3707dd57bc50fd74d6249262f0e82");
++            case G_CAMERA_NAME -> validate(G_CAMERA, 65820000L,
++                    "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83",
++                    "1975b2f17177bc89a5dff31f9e64a6cae281a53dc1d1d59b1d147fe1c82afa00");
++            case PIXEL_CAMERA_SERVICES_NAME -> validate(PIXEL_CAMERA_SERVICES, 124000L,
++                    "226bb0439d6baeaa5a397c586e7031d8addfaec73c65be212f4a5dbfbf621b92");
++            case ANDROID_AUTO_NAME -> validate(ANDROID_AUTO, 11_0_635014L,
++                    "1ca8dcc0bed3cbd872d2cb791200c0292ca9975768a82d676b8b424fb65b5295");
+ 
+             default -> PackageId.UNKNOWN;
+         };
+     }
+ 
++    private static String[] mainGmsCerts() {
++        return new String[] {
++                // "bd32" SHA256withRSA issued in March 2020
++                "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053",
++                // "38d1" MD5withRSA issued in August 2008
++                "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83",
++                // "58e1" MD5withRSA issued in April 2008
++                "1975b2f17177bc89a5dff31f9e64a6cae281a53dc1d1d59b1d147fe1c82afa00",
++        };
++    }
++
+     private int validateSystemPkg(int packageId) {
+         if (isSystem) {
+             return packageId;
+-- 
+2.34.1
+

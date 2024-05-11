@@ -1,0 +1,58 @@
+From b69236498dd9fef266f8cd4f97de5d8c5f1aca02 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Fri, 18 Aug 2023 12:21:13 +0300
+Subject: [PATCH 15/45] add hooks for modifying ActivityThread behavior
+
+---
+ core/java/android/app/ActivityThread.java      | 10 ++++++++--
+ core/java/android/app/ActivityThreadHooks.java | 17 +++++++++++++++++
+ 2 files changed, 25 insertions(+), 2 deletions(-)
+ create mode 100644 core/java/android/app/ActivityThreadHooks.java
+
+diff --git a/core/java/android/app/ActivityThread.java b/core/java/android/app/ActivityThread.java
+index 6ddb36a72aa9..4fb1a3998489 100644
+--- a/core/java/android/app/ActivityThread.java
++++ b/core/java/android/app/ActivityThread.java
+@@ -4836,8 +4836,14 @@ public final class ActivityThread extends ClientTransactionHandler
+             } else {
+                 cl = packageInfo.getClassLoader();
+             }
+-            service = packageInfo.getAppFactory()
+-                    .instantiateService(cl, data.info.name, data.intent);
++            {
++                String className = data.info.name;
++                service = ActivityThreadHooks.instantiateService(className);
++                if (service == null) {
++                    service = packageInfo.getAppFactory()
++                            .instantiateService(cl, className, data.intent);
++                }
++            }
+             ContextImpl context = ContextImpl.getImpl(service
+                     .createServiceBaseContext(this, packageInfo));
+             if (data.info.splitName != null) {
+diff --git a/core/java/android/app/ActivityThreadHooks.java b/core/java/android/app/ActivityThreadHooks.java
+new file mode 100644
+index 000000000000..95342db6f7a9
+--- /dev/null
++++ b/core/java/android/app/ActivityThreadHooks.java
+@@ -0,0 +1,17 @@
++package android.app;
++
++import android.content.Context;
++import android.os.Bundle;
++import android.os.Process;
++import android.os.RemoteException;
++import android.util.Log;
++
++import java.util.Objects;
++
++class ActivityThreadHooks {
++
++    static Service instantiateService(String className) {
++        Service res = null;
++        return res;
++    }
++}
+-- 
+2.34.1
+

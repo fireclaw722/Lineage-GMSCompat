@@ -1,0 +1,385 @@
+From 18012ff09c487e8d7b404c198c0e17fffa03a6c6 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Sun, 31 Jul 2022 10:06:14 +0300
+Subject: [PATCH 12/45] add helpers for system_server extensions
+
+---
+ .../SystemNotificationChannels.java           |  15 ++
+ .../server/ext/DelayedConditionalAction.java  | 133 ++++++++++++++++++
+ .../android/server/ext/IntentReceiver.java    | 103 ++++++++++++++
+ .../java/com/android/server/ext/SseUtils.java |  23 +++
+ .../android/server/ext/SystemServerExt.java   |  37 +++++
+ .../java/com/android/server/SystemServer.java |   2 +
+ 6 files changed, 313 insertions(+)
+ create mode 100644 services/core/java/com/android/server/ext/DelayedConditionalAction.java
+ create mode 100644 services/core/java/com/android/server/ext/IntentReceiver.java
+ create mode 100644 services/core/java/com/android/server/ext/SseUtils.java
+ create mode 100644 services/core/java/com/android/server/ext/SystemServerExt.java
+
+diff --git a/core/java/com/android/internal/notification/SystemNotificationChannels.java b/core/java/com/android/internal/notification/SystemNotificationChannels.java
+index fef5e83cecca..f9179f2a1f60 100644
+--- a/core/java/com/android/internal/notification/SystemNotificationChannels.java
++++ b/core/java/com/android/internal/notification/SystemNotificationChannels.java
+@@ -217,6 +217,8 @@ public class SystemNotificationChannels {
+                 NotificationManager.IMPORTANCE_LOW);
+         channelsList.add(abusiveBackgroundAppsChannel);
+ 
++        extraChannels(context, channelsList);
++
+         nm.createNotificationChannels(channelsList);
+     }
+ 
+@@ -252,4 +254,17 @@ public class SystemNotificationChannels {
+     }
+ 
+     private SystemNotificationChannels() {}
++
++    private static void extraChannels(Context ctx, List<NotificationChannel> dest) {
++    }
++
++    private static NotificationChannel channel(Context ctx, String id, int nameRes, int importance, boolean silent, List<NotificationChannel> dest) {
++        var c = new NotificationChannel(id, ctx.getText(nameRes), importance);
++        if (silent) {
++            c.setSound(null, null);
++            c.enableVibration(false);
++        }
++        dest.add(c);
++        return c;
++    }
+ }
+diff --git a/services/core/java/com/android/server/ext/DelayedConditionalAction.java b/services/core/java/com/android/server/ext/DelayedConditionalAction.java
+new file mode 100644
+index 000000000000..bd7b61049138
+--- /dev/null
++++ b/services/core/java/com/android/server/ext/DelayedConditionalAction.java
+@@ -0,0 +1,133 @@
++/*
++ * Copyright (C) 2022 GrapheneOS
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.ext;
++
++import android.annotation.IntRange;
++import android.app.AlarmManager;
++import android.content.Context;
++import android.ext.settings.IntSetting;
++import android.os.Build;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.SystemClock;
++import android.util.Slog;
++
++/**
++ * Infrastructure for actions that:
++ * - happen after a user-configurable device-wide (Settings.Global) delay
++ * - need to be taken even when the device is in deep sleep
++ * - need to be rescheduled based on some listenable event
++ */
++public abstract class DelayedConditionalAction {
++    private static final String TAG = "DelayedConditionalAction";
++
++    protected final SystemServerExt sse;
++    protected final Thread thread;
++    protected final Handler handler;
++
++    protected final IntSetting setting;
++
++    protected final AlarmManager alarmManager;
++    private final AlarmManager.OnAlarmListener alarmListener;
++
++    protected DelayedConditionalAction(SystemServerExt sse, IntSetting setting, Handler handler) {
++        this.sse = sse;
++
++        Looper looper = handler.getLooper();
++        thread = looper.getThread();
++        this.handler = handler;
++
++        if (Build.isDebuggable()) {
++            if (thread != Thread.currentThread()) {
++                throw new IllegalStateException("all calls should happen on the same thread");
++            }
++        }
++
++        Context ctx = sse.context;
++        alarmManager = ctx.getSystemService(AlarmManager.class);
++
++        alarmListener = () -> {
++            if (getDelayDurationMillis() == 0) {
++                return;
++            }
++
++            alarmTriggered();
++        };
++
++        registerStateListener();
++
++        this.setting = setting;
++
++        if (setting.canObserveState()) {
++            setting.registerObserver(ctx, s -> update(), handler);
++        }
++    }
++
++    private boolean alarmScheduled;
++
++    protected final void update() {
++        final Thread curThread = Thread.currentThread();
++        if (curThread != thread) {
++            String msg = "update() called on an unknown thread " + curThread;
++            if (Build.isDebuggable()) {
++                throw new IllegalStateException(msg);
++            } else {
++                Slog.e(TAG, msg, new Throwable());
++                return;
++            }
++        }
++
++        if (alarmScheduled) {
++            alarmManager.cancel(alarmListener);
++            alarmScheduled = false;
++        }
++
++        if (!shouldScheduleAlarm()) {
++            return;
++        }
++
++        long delayMillis = getDelayDurationMillis();
++
++        if (delayMillis == 0) {
++            return;
++        }
++
++        long current = SystemClock.elapsedRealtime();
++
++        if (Long.MAX_VALUE - delayMillis < current) {
++            return;
++        }
++
++        final long triggerAt = current + delayMillis;
++
++        alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt,
++                    getClass().getName(), alarmListener, handler);
++        alarmScheduled = true;
++    }
++
++    @IntRange(from = 0)
++    private long getDelayDurationMillis() {
++        return Math.max(0, setting.get(sse.context));
++    }
++
++    // Make sure to use the same Handler that is used for all other callbacks;
++    // call update() to reschedule / cancel the alarm
++    protected abstract void registerStateListener();
++
++    protected abstract boolean shouldScheduleAlarm();
++    protected abstract void alarmTriggered();
++}
+diff --git a/services/core/java/com/android/server/ext/IntentReceiver.java b/services/core/java/com/android/server/ext/IntentReceiver.java
+new file mode 100644
+index 000000000000..f2572b15bb32
+--- /dev/null
++++ b/services/core/java/com/android/server/ext/IntentReceiver.java
+@@ -0,0 +1,103 @@
++package com.android.server.ext;
++
++import android.annotation.Nullable;
++import android.app.PendingIntent;
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.os.Bundle;
++import android.os.Handler;
++import android.util.ArrayMap;
++import android.util.Slog;
++
++import com.android.internal.os.BackgroundThread;
++
++import java.util.function.Supplier;
++
++// Note that instances of IntentReceiver subclasses are:
++// - singletons
++// - registered lazily
++// - never unregistered
++// - not automatically re-registered after process restart (doesn't matter in system_server)
++public abstract class IntentReceiver extends BroadcastReceiver {
++    protected final String TAG = getClass().getSimpleName();
++
++    private static final ArrayMap<Class, IntentReceiver> map = new ArrayMap<>();
++
++    public static <T extends IntentReceiver> IntentReceiver getInstance(
++            Class<T> cls, Supplier<T> supplier, Context ctx) {
++        synchronized (map) {
++            IntentReceiver instance = map.get(cls);
++            if (instance == null) {
++                instance = supplier.get();
++                instance.context = ctx;
++                var filter = new IntentFilter(instance.getIntentAction());
++                ctx.registerReceiver(instance, filter, null,
++                        instance.getScheduler(), Context.RECEIVER_NOT_EXPORTED);
++                map.put(cls, instance);
++            }
++            return instance;
++        }
++    }
++
++    private Context context;
++
++    private PendingIntent basePendingIntent;
++    private long prevId;
++
++    private String getIntentAction() {
++        return getClass().getName();
++    }
++
++    private Intent getBaseIntent() {
++        var i = new Intent(getIntentAction());
++        i.setPackage(context.getPackageName());
++        return i;
++    }
++
++    public static <T extends IntentReceiver> PendingIntent getPendingIntent(
++            Class<T> cls, Supplier<T> supplier, @Nullable Bundle args, Context ctx) {
++        return getInstance(cls, supplier, ctx).getPendingIntent(args);
++    }
++
++    public PendingIntent getPendingIntent(@Nullable Bundle args) {
++        if (args == null) {
++            synchronized (this) {
++                PendingIntent base = basePendingIntent;
++                if (base == null) {
++                    base = PendingIntent.getBroadcast(context, 0, getBaseIntent(), PendingIntent.FLAG_IMMUTABLE);
++                    basePendingIntent = base;
++                }
++                return base;
++            }
++        } else {
++            long id;
++            synchronized (this) {
++                id = prevId++;
++            }
++
++            var i = getBaseIntent();
++            i.setIdentifier(Long.toString(id));
++            i.replaceExtras(args);
++            return PendingIntent.getBroadcast(context, 0, i, PendingIntent.FLAG_IMMUTABLE);
++        }
++    }
++
++    @Override
++    public final void onReceive(Context context, Intent intent) {
++        Slog.d(TAG, "onReceive: " + intent);
++        String idStr = intent.getIdentifier();
++        Bundle args = Bundle.EMPTY;
++        if (idStr != null) {
++            args = intent.getExtras();
++        }
++        onReceive(context, args);
++    }
++
++    public Handler getScheduler() {
++        return BackgroundThread.getHandler();
++    }
++
++    public abstract void onReceive(Context ctx, Bundle args);
++}
+diff --git a/services/core/java/com/android/server/ext/SseUtils.java b/services/core/java/com/android/server/ext/SseUtils.java
+new file mode 100644
+index 000000000000..a7a47e817fe5
+--- /dev/null
++++ b/services/core/java/com/android/server/ext/SseUtils.java
+@@ -0,0 +1,23 @@
++package com.android.server.ext;
++
++import android.app.Notification;
++import android.app.PendingIntent;
++import android.content.Context;
++import android.content.Intent;
++
++public class SseUtils {
++
++    public static Notification.Action notifAction(Context ctx, Intent broadcastIntent, int textRes) {
++        return notifActionBuilder(ctx, broadcastIntent, textRes).build();
++    }
++
++    public static Notification.Action.Builder notifActionBuilder(Context ctx, Intent broadcastIntent, int textRes) {
++        var pi = PendingIntent.getBroadcast(ctx, 0, broadcastIntent, PendingIntent.FLAG_IMMUTABLE);
++        return new Notification.Action.Builder(null, ctx.getText(textRes), pi);
++    }
++
++    public static void addNotifAction(Context ctx, PendingIntent intent, int textRes, Notification.Builder dst) {
++        var nb = new Notification.Action.Builder(null, ctx.getText(textRes), intent);
++        dst.addAction(nb.build());
++    }
++}
+diff --git a/services/core/java/com/android/server/ext/SystemServerExt.java b/services/core/java/com/android/server/ext/SystemServerExt.java
+new file mode 100644
+index 000000000000..6969e8773928
+--- /dev/null
++++ b/services/core/java/com/android/server/ext/SystemServerExt.java
+@@ -0,0 +1,37 @@
++package com.android.server.ext;
++
++import android.content.Context;
++import android.content.pm.PackageManager;
++import android.os.Handler;
++
++import com.android.internal.os.BackgroundThread;
++import com.android.server.pm.PackageManagerService;
++
++public final class SystemServerExt {
++
++    public final Context context;
++    public final Handler bgHandler;
++    public final PackageManagerService packageManager;
++
++    private SystemServerExt(Context systemContext, PackageManagerService pm) {
++        context = systemContext;
++        bgHandler = BackgroundThread.getHandler();
++        packageManager = pm;
++    }
++
++    /*
++     Called after system server has completed its initialization,
++     but before any of the apps are started.
++
++     Call from com.android.server.SystemServer#startOtherServices(), at the end of lambda
++     that is passed into mActivityManagerService.systemReady()
++     */
++    public static void init(Context systemContext, PackageManagerService pm) {
++        SystemServerExt sse = new SystemServerExt(systemContext, pm);
++        sse.bgHandler.post(sse::initBgThread);
++    }
++
++    void initBgThread() {
++
++    }
++}
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index fb36c0168172..308a0fdf7a8a 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -3280,6 +3280,8 @@ public final class SystemServer implements Dumpable {
+                 reportWtf("Triggering OdsignStatsLogger", e);
+             }
+             t.traceEnd();
++
++            com.android.server.ext.SystemServerExt.init(mSystemContext, mPackageManagerService);
+         }, t);
+ 
+         t.traceBegin("LockSettingsThirdPartyAppsStarted");
+-- 
+2.34.1
+

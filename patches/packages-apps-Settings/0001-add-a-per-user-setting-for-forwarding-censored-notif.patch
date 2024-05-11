@@ -1,0 +1,190 @@
+From 3dde0ed5219dea6522097f1877b60acd67dc201a Mon Sep 17 00:00:00 2001
+From: June <june@eridan.me>
+Date: Wed, 16 Mar 2022 07:09:46 +0200
+Subject: [PATCH 1/2] add a per-user setting for forwarding censored notifs
+
+Change-Id: Ie27ae120ce919843120a05cd07b24bba5e86d53b
+Signed-off-by: June <june@eridan.me>
+Co-authored-by: inthewaves <inthewaves@pm.me>
+Co-authored-by: June <june@eridan.me>
+---
+ res/values/strings.xml                        |  3 +
+ res/xml/user_settings.xml                     |  6 ++
+ ...ionsToCurrentUserPreferenceController.java | 60 +++++++++++++++++++
+ .../android/settings/users/UserSettings.java  | 19 ++++++
+ 4 files changed, 88 insertions(+)
+ create mode 100644 src/com/android/settings/users/SendCensoredNotificationsToCurrentUserPreferenceController.java
+
+diff --git a/res/values/strings.xml b/res/values/strings.xml
+index 8fcbcbf6b49..d82da4a2ddd 100644
+--- a/res/values/strings.xml
++++ b/res/values/strings.xml
+@@ -12633,4 +12633,7 @@
+     <string name="content_protection_preference_subpage_summary"></string>
+     <!-- Default information at the bottom of the subpage of content protection settings. Will be overlaid by OEM. -->
+     <string name="content_protection_preference_subpage_info"></string>
++
++    <string name="user_settings_send_censored_notifications_to_current">Send notifications to current user</string>
++    <string name="user_settings_send_censored_notifications_to_current_summary">Your lock screen notifications will be forwarded to the current user if you are active in the background. Only the user\'s name, the app\'s name, and the time received will be shown.</string>
+ </resources>
+diff --git a/res/xml/user_settings.xml b/res/xml/user_settings.xml
+index 59217226592..6c7ac2c091a 100644
+--- a/res/xml/user_settings.xml
++++ b/res/xml/user_settings.xml
+@@ -100,4 +100,10 @@
+         android:fragment="com.android.settings.users.TimeoutToDockUserSettings"
+         settings:controller="com.android.settings.users.TimeoutToDockUserPreferenceController"/>
+ 
++    <SwitchPreference
++            android:key="user_settings_send_censored_notifications_to_current"
++            android:title="@string/user_settings_send_censored_notifications_to_current"
++            android:summary="@string/user_settings_send_censored_notifications_to_current_summary"
++            android:order="106"/>
++
+ </PreferenceScreen>
+diff --git a/src/com/android/settings/users/SendCensoredNotificationsToCurrentUserPreferenceController.java b/src/com/android/settings/users/SendCensoredNotificationsToCurrentUserPreferenceController.java
+new file mode 100644
+index 00000000000..637d7bbb782
+--- /dev/null
++++ b/src/com/android/settings/users/SendCensoredNotificationsToCurrentUserPreferenceController.java
+@@ -0,0 +1,60 @@
++package com.android.settings.users;
++
++import android.content.Context;
++import android.provider.Settings;
++import android.widget.Toast;
++
++import androidx.annotation.VisibleForTesting;
++import androidx.preference.Preference;
++
++import com.android.settings.R;
++import com.android.settings.core.TogglePreferenceController;
++
++public class SendCensoredNotificationsToCurrentUserPreferenceController
++        extends TogglePreferenceController {
++    private final UserCapabilities mUserCaps;
++
++    public SendCensoredNotificationsToCurrentUserPreferenceController(Context context, String key) {
++        super(context, key);
++        mUserCaps = UserCapabilities.create(context);
++    }
++
++    @Override
++    public void updateState(Preference preference) {
++        super.updateState(preference);
++        mUserCaps.updateAddUserCapabilities(mContext);
++        if (!isAvailable()) {
++            preference.setVisible(false);
++        } else {
++            preference.setVisible(mUserCaps.mUserSwitcherEnabled);
++        }
++    }
++
++    @Override
++    public int getAvailabilityStatus() {
++        return mUserCaps.mUserSwitcherEnabled ? AVAILABLE : CONDITIONALLY_UNAVAILABLE;
++    }
++
++    @Override
++    public boolean isChecked() {
++        return Settings.Secure.getInt(mContext.getContentResolver(),
++                Settings.Secure.SEND_CENSORED_NOTIFICATIONS_TO_CURRENT_USER, 0) != 0;
++    }
++
++    @Override
++    public boolean setChecked(boolean isChecked) {
++        return Settings.Secure.putInt(mContext.getContentResolver(),
++                Settings.Secure.SEND_CENSORED_NOTIFICATIONS_TO_CURRENT_USER, isChecked ? 1 : 0);
++    }
++
++    @Override
++    public CharSequence getSummary() {
++        return mContext.getString(
++                R.string.user_settings_send_censored_notifications_to_current_summary);
++    }
++
++    @Override
++    public int getSliceHighlightMenuRes() {
++        return R.string.menu_key_system;
++    }
++}
+diff --git a/src/com/android/settings/users/UserSettings.java b/src/com/android/settings/users/UserSettings.java
+index 29d136fd9cc..37298b6d796 100644
+--- a/src/com/android/settings/users/UserSettings.java
++++ b/src/com/android/settings/users/UserSettings.java
+@@ -137,6 +137,8 @@ public class UserSettings extends SettingsPreferenceFragment
+     private static final String KEY_REMOVE_GUEST_ON_EXIT = "remove_guest_on_exit";
+     private static final String KEY_GUEST_USER_CATEGORY = "guest_user_category";
+     private static final String KEY_ALLOW_MULTIPLE_USERS = "allow_multiple_users";
++    private static final String KEY_SEND_CENSORED_NOTIFICATIONS =
++            "user_settings_send_censored_notifications_to_current";
+ 
+     private static final String SETTING_GUEST_HAS_LOGGED_IN = "systemui.guest_has_logged_in";
+ 
+@@ -225,6 +227,7 @@ public class UserSettings extends SettingsPreferenceFragment
+     private AddUserWhenLockedPreferenceController mAddUserWhenLockedPreferenceController;
+     private GuestTelephonyPreferenceController mGuestTelephonyPreferenceController;
+     private RemoveGuestOnExitPreferenceController mRemoveGuestOnExitPreferenceController;
++    private SendCensoredNotificationsToCurrentUserPreferenceController mSendCensoredNotificationsToCurrentUserPreferenceController;
+     private MultiUserTopIntroPreferenceController mMultiUserTopIntroPreferenceController;
+     private TimeoutToDockUserPreferenceController mTimeoutToDockUserPreferenceController;
+     private UserCreatingDialog mUserCreatingDialog;
+@@ -322,6 +325,10 @@ public class UserSettings extends SettingsPreferenceFragment
+         mRemoveGuestOnExitPreferenceController = new RemoveGuestOnExitPreferenceController(
+                 activity, KEY_REMOVE_GUEST_ON_EXIT, this, mHandler);
+ 
++        mSendCensoredNotificationsToCurrentUserPreferenceController =
++                new SendCensoredNotificationsToCurrentUserPreferenceController(activity,
++                        KEY_SEND_CENSORED_NOTIFICATIONS);
++
+         mMultiUserTopIntroPreferenceController = new MultiUserTopIntroPreferenceController(activity,
+                 KEY_MULTIUSER_TOP_INTRO);
+ 
+@@ -332,11 +339,14 @@ public class UserSettings extends SettingsPreferenceFragment
+         mAddUserWhenLockedPreferenceController.displayPreference(screen);
+         mGuestTelephonyPreferenceController.displayPreference(screen);
+         mRemoveGuestOnExitPreferenceController.displayPreference(screen);
++        mSendCensoredNotificationsToCurrentUserPreferenceController.displayPreference(screen);
+         mMultiUserTopIntroPreferenceController.displayPreference(screen);
+         mTimeoutToDockUserPreferenceController.displayPreference(screen);
+ 
+         screen.findPreference(mAddUserWhenLockedPreferenceController.getPreferenceKey())
+                 .setOnPreferenceChangeListener(mAddUserWhenLockedPreferenceController);
++        screen.findPreference(mSendCensoredNotificationsToCurrentUserPreferenceController.getPreferenceKey())
++                .setOnPreferenceChangeListener(mSendCensoredNotificationsToCurrentUserPreferenceController);
+ 
+         screen.findPreference(mGuestTelephonyPreferenceController.getPreferenceKey())
+                 .setOnPreferenceChangeListener(mGuestTelephonyPreferenceController);
+@@ -420,6 +430,9 @@ public class UserSettings extends SettingsPreferenceFragment
+                 mTimeoutToDockUserPreferenceController.getPreferenceKey()));
+         mRemoveGuestOnExitPreferenceController.updateState(screen.findPreference(
+                 mRemoveGuestOnExitPreferenceController.getPreferenceKey()));
++        mSendCensoredNotificationsToCurrentUserPreferenceController.updateState(screen.findPreference(
++                mSendCensoredNotificationsToCurrentUserPreferenceController.getPreferenceKey()));
++
+         if (mShouldUpdateUserList) {
+             updateUI();
+         }
+@@ -1303,6 +1316,10 @@ public class UserSettings extends SettingsPreferenceFragment
+                 mGuestTelephonyPreferenceController.getPreferenceKey());
+         mGuestTelephonyPreferenceController.updateState(guestCallPreference);
+ 
++        final Preference sendCensoredNotifs = getPreferenceScreen().findPreference(
++                mSendCensoredNotificationsToCurrentUserPreferenceController.getPreferenceKey());
++        mSendCensoredNotificationsToCurrentUserPreferenceController.updateState(sendCensoredNotifs);
++
+         final Preference multiUserTopIntroPreference = getPreferenceScreen().findPreference(
+                 mMultiUserTopIntroPreferenceController.getPreferenceKey());
+         mMultiUserTopIntroPreferenceController.updateState(multiUserTopIntroPreference);
+@@ -1753,6 +1770,8 @@ public class UserSettings extends SettingsPreferenceFragment
+                             new AddUserWhenLockedPreferenceController(
+                                     context, KEY_ADD_USER_WHEN_LOCKED);
+                     controller.updateNonIndexableKeys(niks);
++                    new SendCensoredNotificationsToCurrentUserPreferenceController(context,
++                            KEY_SEND_CENSORED_NOTIFICATIONS).updateNonIndexableKeys(niks);
+                     new AutoSyncDataPreferenceController(context, null /* parent */)
+                             .updateNonIndexableKeys(niks);
+                     new AutoSyncPersonalDataPreferenceController(context, null /* parent */)
+-- 
+2.34.1
+

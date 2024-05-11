@@ -1,0 +1,260 @@
+From c810dbd5bd238c5344787f224c38ed156f80b16b Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Sun, 31 Jul 2022 18:24:34 +0300
+Subject: [PATCH 23/44] infrastructure for spoofing self permission checks
+
+---
+ core/api/system-current.txt                   |  5 ++
+ core/java/android/app/AppOpsManager.java      | 44 +++++++++++--
+ .../content/pm/AppPermissionUtils.java        | 65 +++++++++++++++++++
+ .../android/permission/PermissionManager.java | 28 +++++++-
+ 4 files changed, 136 insertions(+), 6 deletions(-)
+ create mode 100644 core/java/android/content/pm/AppPermissionUtils.java
+
+diff --git a/core/api/system-current.txt b/core/api/system-current.txt
+index 41757bc013ee..745a06ccb755 100644
+--- a/core/api/system-current.txt
++++ b/core/api/system-current.txt
+@@ -3746,6 +3746,11 @@ package android.content.om {
+ 
+ package android.content.pm {
+ 
++  public class AppPermissionUtils {
++    method public static boolean shouldSkipPermissionRequestDialog(@NonNull android.content.pm.GosPackageState, @NonNull String);
++    method public static boolean shouldSpoofPermissionRequestResult(@NonNull android.content.pm.GosPackageState, @NonNull String);
++  }
++
+   public class ApplicationInfo extends android.content.pm.PackageItemInfo implements android.os.Parcelable {
+     method @NonNull public android.ext.AppInfoExt ext();
+     method @RequiresPermission(android.Manifest.permission.DELETE_PACKAGES) public boolean hasFragileUserData();
+diff --git a/core/java/android/app/AppOpsManager.java b/core/java/android/app/AppOpsManager.java
+index 4b24b1f2b2a1..1794a1fd7eb8 100644
+--- a/core/java/android/app/AppOpsManager.java
++++ b/core/java/android/app/AppOpsManager.java
+@@ -44,6 +44,7 @@ import android.content.AttributionSource;
+ import android.content.ComponentName;
+ import android.content.ContentResolver;
+ import android.content.Context;
++import android.content.pm.AppPermissionUtils;
+ import android.content.pm.ApplicationInfo;
+ import android.content.pm.PackageManager;
+ import android.content.pm.ParceledListSlice;
+@@ -8435,12 +8436,19 @@ public class AppOpsManager {
+     private int unsafeCheckOpRawNoThrow(int op, int uid, @NonNull String packageName,
+             int virtualDeviceId) {
+         try {
++            final int mode;
+             if (virtualDeviceId == Context.DEVICE_ID_DEFAULT) {
+-                return mService.checkOperationRaw(op, uid, packageName, null);
++                mode = mService.checkOperationRaw(op, uid, packageName, null);
+             } else {
+-                return mService.checkOperationRawForDevice(op, uid, packageName, null,
++                mode = mService.checkOperationRawForDevice(op, uid, packageName, null,
+                         Context.DEVICE_ID_DEFAULT);
+             }
++            if (mode != MODE_ALLOWED && uid == Process.myUid()) {
++                if (AppPermissionUtils.shouldSpoofSelfAppOpCheck(op)) {
++                    return MODE_ALLOWED;
++                }
++            }
++            return mode;
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
+@@ -8637,7 +8645,15 @@ public class AppOpsManager {
+                 }
+             }
+ 
+-            return syncOp.getOpMode();
++            final int mode = syncOp.getOpMode();
++
++            if (mode != MODE_ALLOWED && uid == Process.myUid()) {
++                if (AppPermissionUtils.shouldSpoofSelfAppOpCheck(op)) {
++                    return MODE_ALLOWED;
++                }
++            }
++
++            return mode;
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
+@@ -8812,7 +8828,21 @@ public class AppOpsManager {
+                 }
+             }
+ 
+-            return syncOp.getOpMode();
++            final int mode = syncOp.getOpMode();
++
++            if (mode != MODE_ALLOWED) {
++                int uid = attributionSource.getUid();
++                int nextUid = attributionSource.getNextUid();
++                boolean selfCheck = (uid == myUid) && (nextUid == myUid || nextUid == Process.INVALID_UID);
++
++                if (selfCheck) {
++                    if (AppPermissionUtils.shouldSpoofSelfAppOpCheck(op)) {
++                        return MODE_ALLOWED;
++                    }
++                }
++            }
++
++            return mode;
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
+@@ -8912,6 +8942,12 @@ public class AppOpsManager {
+                 mode = mService.checkOperationForDevice(op, uid, packageName, virtualDeviceId);
+             }
+ 
++            if (mode != MODE_ALLOWED && uid == Process.myUid()) {
++                if (AppPermissionUtils.shouldSpoofSelfAppOpCheck(op)) {
++                    return MODE_ALLOWED;
++                }
++            }
++
+             return mode == AppOpsManager.MODE_FOREGROUND ? AppOpsManager.MODE_ALLOWED : mode;
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+diff --git a/core/java/android/content/pm/AppPermissionUtils.java b/core/java/android/content/pm/AppPermissionUtils.java
+new file mode 100644
+index 000000000000..fca33f174172
+--- /dev/null
++++ b/core/java/android/content/pm/AppPermissionUtils.java
+@@ -0,0 +1,65 @@
++/*
++ * Copyright (C) 2022 GrapheneOS
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package android.content.pm;
++
++import android.annotation.NonNull;
++import android.annotation.SystemApi;
++
++/** @hide */
++@SystemApi
++public class AppPermissionUtils {
++
++    // If the list of spoofed permissions changes at runtime, make sure to invalidate the permission
++    // check cache, it's keyed on the PermissionManager.CACHE_KEY_PACKAGE_INFO system property.
++    // Updates of GosPackageState invalidate this cache automatically.
++    //
++    // android.permission.PermissionManager#checkPermissionUncached
++    /** @hide */
++    public static boolean shouldSpoofSelfCheck(String permName) {
++        return false;
++    }
++
++    // android.app.AppOpsManager#checkOpNoThrow
++    // android.app.AppOpsManager#noteOpNoThrow
++    // android.app.AppOpsManager#noteProxyOpNoThrow
++    // android.app.AppOpsManager#unsafeCheckOpRawNoThrow
++    /** @hide */
++    public static boolean shouldSpoofSelfAppOpCheck(int op) {
++        return false;
++    }
++
++    public static boolean shouldSkipPermissionRequestDialog(@NonNull GosPackageState ps, @NonNull String perm) {
++        // Don't check whether the app actually declared this permission:
++        // app can request a permission that isn't declared in its AndroidManifest and if that
++        // permission is split into multiple permissions (based on app's targetSdk), and at least
++        // one of of those split permissions is present in manifest, then permission prompt would be
++        // shown anyway.
++        return getSpoofablePermissionDflag(ps, perm) != 0;
++    }
++
++    // Controls spoofing of Activity#onRequestPermissionsResult() callback
++    public static boolean shouldSpoofPermissionRequestResult(@NonNull GosPackageState ps, @NonNull String perm) {
++        int dflag = getSpoofablePermissionDflag(ps, perm);
++        return dflag != 0 && ps.hasDerivedFlag(dflag);
++    }
++
++    private static int getSpoofablePermissionDflag(GosPackageState ps, String perm) {
++        return 0;
++    }
++
++    private AppPermissionUtils() {}
++}
+diff --git a/core/java/android/permission/PermissionManager.java b/core/java/android/permission/PermissionManager.java
+index 2e299fdbe5f1..9ae00d931989 100644
+--- a/core/java/android/permission/PermissionManager.java
++++ b/core/java/android/permission/PermissionManager.java
+@@ -22,6 +22,7 @@ import static android.content.pm.PackageManager.FLAG_PERMISSION_POLICY_FIXED;
+ import static android.content.pm.PackageManager.FLAG_PERMISSION_SYSTEM_FIXED;
+ import static android.content.pm.PackageManager.FLAG_PERMISSION_USER_FIXED;
+ import static android.content.pm.PackageManager.FLAG_PERMISSION_USER_SET;
++import static android.content.pm.PackageManager.PERMISSION_GRANTED;
+ import static android.os.Build.VERSION_CODES.S;
+ 
+ import android.Manifest;
+@@ -49,6 +50,7 @@ import android.compat.annotation.EnabledAfter;
+ import android.content.AttributionSource;
+ import android.content.Context;
+ import android.content.PermissionChecker;
++import android.content.pm.AppPermissionUtils;
+ import android.content.pm.IPackageManager;
+ import android.content.pm.PackageManager;
+ import android.content.pm.ParceledListSlice;
+@@ -1554,12 +1556,22 @@ public final class PermissionManager {
+                     + permission);
+             return PackageManager.PERMISSION_DENIED;
+         }
++        int res;
+         try {
+             sShouldWarnMissingActivityManager = true;
+-            return am.checkPermissionForDevice(permission, pid, uid, deviceId);
++            res = am.checkPermissionForDevice(permission, pid, uid, deviceId);
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
++
++        if (res != PERMISSION_GRANTED) {
++            if (uid == android.os.Process.myUid()) {
++                if (AppPermissionUtils.shouldSpoofSelfCheck(permission)) {
++                    res = PERMISSION_GRANTED;
++                }
++            }
++        }
++        return res;
+     }
+ 
+     /**
+@@ -1697,12 +1709,24 @@ public final class PermissionManager {
+     /* @hide */
+     private static int checkPackageNamePermissionUncached(
+             String permName, String pkgName, int deviceId, @UserIdInt int userId) {
++        int res;
+         try {
+-            return ActivityThread.getPermissionManager().checkPermission(
++            res = ActivityThread.getPermissionManager().checkPermission(
+                     pkgName, permName, deviceId, userId);
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
++
++        if (res != PERMISSION_GRANTED) {
++            if (pkgName.equals(ActivityThread.currentPackageName())
++                    && userId == UserHandle.myUserId()
++                    && AppPermissionUtils.shouldSpoofSelfCheck(permName))
++            {
++                res = PERMISSION_GRANTED;
++            }
++        }
++
++        return res;
+     }
+ 
+     /* @hide */
+-- 
+2.34.1
+

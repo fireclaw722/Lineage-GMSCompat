@@ -1,0 +1,30 @@
+From 1c2636a6e28845cbb11f9d8348380e2eeb0f953a Mon Sep 17 00:00:00 2001
+From: Builder <admin@ceruleanfire.com>
+Date: Wed, 8 May 2024 01:22:49 +0000
+Subject: [PATCH 3/3] Add messaging replacement, QKSMS, and Email with K9-Mail
+
+Change-Id: I71bc9d57331842d3f1713f18daf0ca3ebf935dba
+---
+ config/common.mk | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/config/common.mk b/config/common.mk
+index ca58f4ad..109f846a 100644
+--- a/config/common.mk
++++ b/config/common.mk
+@@ -252,3 +252,12 @@ include vendor/lineage/config/version.mk
+ 
+ -include $(WORKSPACE)/build_env/image-auto-bits.mk
+ -include vendor/lineage/config/partner_gms.mk
++
++# SMS replacement
++PRODUCT_PACKAGES += \
++    QKSMS
++
++# Email
++PRODUCT_PACKAGES += \
++    K9Mail
++
+-- 
+2.34.1
+

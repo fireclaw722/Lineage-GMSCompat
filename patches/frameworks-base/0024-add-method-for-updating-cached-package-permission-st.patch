@@ -1,0 +1,183 @@
+From 0981389a9c94baf0a203afd7beaf8039e644bfc0 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Mon, 18 Dec 2023 14:56:03 +0200
+Subject: [PATCH 24/45] add method for updating cached package permission state
+
+Package permission state is updated automatically for all packages after events that might impact
+it, e.g. after package install or uninstall, after storage volume mount, after OS update etc.
+
+On GrapheneOS, per-package permission policy can be changed via GosPackageState packageFlags.
+This new method is needed for updating the cached permission state manually after packageFlags
+change.
+---
+ core/api/system-current.txt                       |  1 +
+ .../android/permission/IPermissionManager.aidl    |  2 ++
+ .../android/permission/PermissionManager.java     |  8 ++++++++
+ .../pm/permission/PermissionManagerService.java   | 15 +++++++++++++++
+ .../permission/PermissionManagerServiceImpl.java  |  5 +++++
+ .../PermissionManagerServiceInterface.java        |  2 ++
+ .../PermissionManagerServiceLoggingDecorator.java |  6 ++++++
+ .../PermissionManagerServiceTestingShim.java      |  6 ++++++
+ .../PermissionManagerServiceTracingDecorator.java | 10 ++++++++++
+ .../access/permission/PermissionService.kt        |  5 +++++
+ 10 files changed, 60 insertions(+)
+
+diff --git a/core/api/system-current.txt b/core/api/system-current.txt
+index 1a9e197816c5..2fcc811eddf3 100644
+--- a/core/api/system-current.txt
++++ b/core/api/system-current.txt
+@@ -11074,6 +11074,7 @@ package android.permission {
+     method @Deprecated @RequiresPermission(android.Manifest.permission.MANAGE_ONE_TIME_PERMISSION_SESSIONS) public void startOneTimePermissionSession(@NonNull String, long, int, int);
+     method @RequiresPermission(android.Manifest.permission.MANAGE_ONE_TIME_PERMISSION_SESSIONS) public void startOneTimePermissionSession(@NonNull String, long, long, int, int);
+     method @RequiresPermission(android.Manifest.permission.MANAGE_ONE_TIME_PERMISSION_SESSIONS) public void stopOneTimePermissionSession(@NonNull String);
++    method public void updatePermissionState(@NonNull String, int);
+     field @RequiresPermission(android.Manifest.permission.START_REVIEW_PERMISSION_DECISIONS) public static final String ACTION_REVIEW_PERMISSION_DECISIONS = "android.permission.action.REVIEW_PERMISSION_DECISIONS";
+     field public static final String EXTRA_PERMISSION_USAGES = "android.permission.extra.PERMISSION_USAGES";
+     field public static final int PERMISSION_GRANTED = 0; // 0x0
+diff --git a/core/java/android/permission/IPermissionManager.aidl b/core/java/android/permission/IPermissionManager.aidl
+index 7cecfdca851a..ac1bac28261c 100644
+--- a/core/java/android/permission/IPermissionManager.aidl
++++ b/core/java/android/permission/IPermissionManager.aidl
+@@ -99,4 +99,6 @@ interface IPermissionManager {
+     int checkPermission(String packageName, String permissionName, int deviceId, int userId);
+ 
+     int checkUidPermission(int uid, String permissionName, int deviceId);
++
++    void updatePermissionState(String packageName, int userId);
+ }
+diff --git a/core/java/android/permission/PermissionManager.java b/core/java/android/permission/PermissionManager.java
+index c380ae36d6e4..2e299fdbe5f1 100644
+--- a/core/java/android/permission/PermissionManager.java
++++ b/core/java/android/permission/PermissionManager.java
+@@ -1774,4 +1774,12 @@ public final class PermissionManager {
+             }
+         }
+     }
++
++    public void updatePermissionState(@NonNull String packageName, int userId) {
++        try {
++            mPermissionManager.updatePermissionState(packageName, userId);
++        } catch (RemoteException e) {
++            e.rethrowFromSystemServer();
++        }
++    }
+ }
+diff --git a/services/core/java/com/android/server/pm/permission/PermissionManagerService.java b/services/core/java/com/android/server/pm/permission/PermissionManagerService.java
+index d3931a303d0d..193a0ed7fcab 100644
+--- a/services/core/java/com/android/server/pm/permission/PermissionManagerService.java
++++ b/services/core/java/com/android/server/pm/permission/PermissionManagerService.java
+@@ -474,6 +474,21 @@ public class PermissionManagerService extends IPermissionManager.Stub {
+         return result;
+     }
+ 
++    @Override
++    public void updatePermissionState(String packageName, int userId) {
++        mContext.enforceCallingPermission(
++                android.Manifest.permission.GRANT_RUNTIME_PERMISSIONS,
++                "updatePermissionState");
++
++        AndroidPackage pkg = mPackageManagerInt.getPackage(packageName);
++        if (pkg == null) {
++            Slog.w(LOG_TAG, "updatePermissionState: no AndroidPackage for " + packageName);
++            return;
++        }
++
++        mPermissionManagerServiceImpl.updatePermissions(pkg, userId);
++    }
++
+     /* Start of delegate methods to PermissionManagerServiceInterface */
+ 
+     @Override
+diff --git a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java
+index bc0e3f009de0..a84c17f8cd22 100644
+--- a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java
++++ b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java
+@@ -3886,6 +3886,11 @@ public class PermissionManagerServiceImpl implements PermissionManagerServiceInt
+                 packageName, pkg, getVolumeUuidForPackage(pkg), flags, mDefaultPermissionCallback);
+     }
+ 
++    @Override
++    public void updatePermissions(@NonNull AndroidPackage pkg, int userId) {
++        restorePermissionState(pkg, false, null, null, userId);
++    }
++
+     /**
+      * Update all permissions for all apps.
+      *
+diff --git a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceInterface.java b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceInterface.java
+index 2d824aa1ba13..a9b1649173c9 100644
+--- a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceInterface.java
++++ b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceInterface.java
+@@ -633,4 +633,6 @@ public interface PermissionManagerServiceInterface extends PermissionManagerInte
+     void onPackageUninstalled(@NonNull String packageName, int appId,
+             @NonNull PackageState packageState, @Nullable AndroidPackage pkg,
+             @NonNull List<AndroidPackage> sharedUserPkgs, @UserIdInt int userId);
++
++    void updatePermissions(@NonNull AndroidPackage pkg, int userId);
+ }
+diff --git a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceLoggingDecorator.java b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceLoggingDecorator.java
+index dacb8c6890a0..51c20dc960e1 100644
+--- a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceLoggingDecorator.java
++++ b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceLoggingDecorator.java
+@@ -440,4 +440,10 @@ public class PermissionManagerServiceLoggingDecorator implements PermissionManag
+         mService.onPackageUninstalled(packageName, appId, packageState, pkg, sharedUserPkgs,
+                 userId);
+     }
++
++    @Override
++    public void updatePermissions(@NonNull AndroidPackage pkg, int userId) {
++        Log.i(LOG_TAG, "updatePermissions(pkgName = " + pkg.getPackageName() + ", userId " + userId);
++        mService.updatePermissions(pkg, userId);
++    }
+ }
+diff --git a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceTestingShim.java b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceTestingShim.java
+index 35d165b9b54a..642ab01e8c12 100644
+--- a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceTestingShim.java
++++ b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceTestingShim.java
+@@ -573,4 +573,10 @@ public class PermissionManagerServiceTestingShim implements PermissionManagerSer
+         mNewImplementation.onPackageUninstalled(packageName, appId, packageState, pkg,
+                 sharedUserPkgs, userId);
+     }
++
++    @Override
++    public void updatePermissions(@NonNull AndroidPackage pkg, int userId) {
++        mOldImplementation.updatePermissions(pkg, userId);
++        mNewImplementation.updatePermissions(pkg, userId);
++    }
+ }
+diff --git a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceTracingDecorator.java b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceTracingDecorator.java
+index cbeede0f425c..973c19149986 100644
+--- a/services/core/java/com/android/server/pm/permission/PermissionManagerServiceTracingDecorator.java
++++ b/services/core/java/com/android/server/pm/permission/PermissionManagerServiceTracingDecorator.java
+@@ -659,4 +659,14 @@ public class PermissionManagerServiceTracingDecorator implements PermissionManag
+             Trace.traceEnd(TRACE_TAG);
+         }
+     }
++
++    @Override
++    public void updatePermissions(@NonNull AndroidPackage pkg, int userId) {
++        Trace.traceBegin(TRACE_TAG, "TaggedTracingPermissionManagerServiceImpl#updatePermissions");
++        try {
++            mService.updatePermissions(pkg, userId);
++        } finally {
++            Trace.traceEnd(TRACE_TAG);
++        }
++    }
+ }
+diff --git a/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt b/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt
+index f469ab547763..1093d033ea27 100644
+--- a/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt
++++ b/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt
+@@ -2871,4 +2871,9 @@ class PermissionService(private val service: AccessCheckingService) :
+                 emptySet<String>()
+             }
+     }
++
++    override fun updatePermissions(pkg: AndroidPackage, userId: Int) {
++        // this new version of PermissionService is WIP and is not used yet
++        TODO()
++    }
+ }
+-- 
+2.34.1
+

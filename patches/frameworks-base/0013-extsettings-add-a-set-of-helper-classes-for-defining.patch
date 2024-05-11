@@ -1,0 +1,674 @@
+From af4780aa5cb016d851f30dea71782201bc9d7653 Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Sun, 12 Feb 2023 19:38:02 +0200
+Subject: [PATCH 13/44] extsettings: add a set of helper classes for defining
+ system settings
+
+---
+ .../android/ext/settings/BoolSetting.java     |  73 ++++++++
+ .../android/ext/settings/BoolSysProperty.java |  25 +++
+ .../android/ext/settings/ExtSettings.java     |  60 +++++++
+ .../java/android/ext/settings/IntSetting.java | 107 +++++++++++
+ .../android/ext/settings/IntSysProperty.java  |  33 ++++
+ core/java/android/ext/settings/Setting.java   | 166 ++++++++++++++++++
+ .../android/ext/settings/StringSetting.java   |  66 +++++++
+ .../ext/settings/StringSysProperty.java       |  25 +++
+ core/java/android/provider/Settings.java      |  13 ++
+ core/res/res/values/config_ext.xml            |   3 +
+ 10 files changed, 571 insertions(+)
+ create mode 100644 core/java/android/ext/settings/BoolSetting.java
+ create mode 100644 core/java/android/ext/settings/BoolSysProperty.java
+ create mode 100644 core/java/android/ext/settings/ExtSettings.java
+ create mode 100644 core/java/android/ext/settings/IntSetting.java
+ create mode 100644 core/java/android/ext/settings/IntSysProperty.java
+ create mode 100644 core/java/android/ext/settings/Setting.java
+ create mode 100644 core/java/android/ext/settings/StringSetting.java
+ create mode 100644 core/java/android/ext/settings/StringSysProperty.java
+ create mode 100644 core/res/res/values/config_ext.xml
+
+diff --git a/core/java/android/ext/settings/BoolSetting.java b/core/java/android/ext/settings/BoolSetting.java
+new file mode 100644
+index 000000000000..c4573f14b50b
+--- /dev/null
++++ b/core/java/android/ext/settings/BoolSetting.java
+@@ -0,0 +1,73 @@
++/*
++ * Copyright (C) 2022 GrapheneOS
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package android.ext.settings;
++
++import android.content.Context;
++
++import java.util.function.BooleanSupplier;
++
++/** @hide */
++public class BoolSetting extends Setting<BoolSetting> {
++    private boolean defaultValue;
++    private volatile BooleanSupplier defaultValueSupplier;
++
++    public BoolSetting(Scope scope, String key, boolean defaultValue) {
++        super(scope, key);
++        this.defaultValue = defaultValue;
++    }
++
++    public BoolSetting(Scope scope, String key, BooleanSupplier defaultValue) {
++        super(scope, key);
++        defaultValueSupplier = defaultValue;
++    }
++
++    public final boolean get(Context ctx) {
++        return get(ctx, ctx.getUserId());
++    }
++
++    // use only if this is a per-user setting and the context is not a per-user one
++    public final boolean get(Context ctx, int userId) {
++        String valueStr = getRaw(ctx, userId);
++
++        if (valueStr == null) {
++            return getDefaultValue();
++        }
++
++        if (valueStr.equals("true")) {
++            return true;
++        }
++
++        if (valueStr.equals("false")) {
++            return false;
++        }
++
++        try {
++            int valueInt = Integer.parseInt(valueStr);
++            if (valueInt == 1) {
++                return true;
++            } else if (valueInt == 0) {
++                return false;
++            }
++        } catch (NumberFormatException e) {
++            e.printStackTrace();
++        }
++
++        return getDefaultValue();
++    }
++
++    public final boolean put(Context ctx, boolean val) {
++        return putRaw(ctx, val ? "1" : "0");
++    }
++
++    private boolean getDefaultValue() {
++        BooleanSupplier supplier = defaultValueSupplier;
++        if (supplier != null) {
++            defaultValue = supplier.getAsBoolean();
++            defaultValueSupplier = null;
++        }
++        return defaultValue;
++    }
++}
+diff --git a/core/java/android/ext/settings/BoolSysProperty.java b/core/java/android/ext/settings/BoolSysProperty.java
+new file mode 100644
+index 000000000000..2667eee153d2
+--- /dev/null
++++ b/core/java/android/ext/settings/BoolSysProperty.java
+@@ -0,0 +1,25 @@
++package android.ext.settings;
++
++import android.os.UserHandle;
++
++import java.util.function.BooleanSupplier;
++
++/** @hide */
++public class BoolSysProperty extends BoolSetting {
++
++    public BoolSysProperty(String key, boolean defaultValue) {
++        super(Scope.SYSTEM_PROPERTY, key, defaultValue);
++    }
++
++    public BoolSysProperty(String key, BooleanSupplier defaultValue) {
++        super(Scope.SYSTEM_PROPERTY, key, defaultValue);
++    }
++
++    public boolean get() {
++        return super.get(null, UserHandle.USER_SYSTEM);
++    }
++
++    public boolean put(boolean val) {
++        return super.put(null, val);
++    }
++}
+diff --git a/core/java/android/ext/settings/ExtSettings.java b/core/java/android/ext/settings/ExtSettings.java
+new file mode 100644
+index 000000000000..e7ce15f18b10
+--- /dev/null
++++ b/core/java/android/ext/settings/ExtSettings.java
+@@ -0,0 +1,60 @@
++package android.ext.settings;
++
++import android.annotation.BoolRes;
++import android.annotation.IntegerRes;
++import android.annotation.StringRes;
++import android.app.AppGlobals;
++import android.content.Context;
++import android.content.res.Resources;
++
++import com.android.internal.R;
++
++import java.lang.reflect.Field;
++import java.util.Set;
++import java.util.concurrent.TimeUnit;
++import java.util.function.BooleanSupplier;
++import java.util.function.IntSupplier;
++import java.util.function.Supplier;
++
++/** @hide */
++public class ExtSettings {
++
++    private ExtSettings() {}
++
++    // used for making settings defined in this class unreadable by third-party apps
++    public static void getKeys(Setting.Scope scope, Set<String> dest) {
++        for (Field field : ExtSettings.class.getDeclaredFields()) {
++            if (!Setting.class.isAssignableFrom(field.getType())) {
++                continue;
++            }
++            Setting s;
++            try {
++                s = (Setting) field.get(null);
++            } catch (IllegalAccessException e) {
++                throw new IllegalStateException(e);
++            }
++
++            if (s.getScope() == scope) {
++                if (!dest.add(s.getKey())) {
++                    throw new IllegalStateException("duplicate definition of setting " + s.getKey());
++                }
++            }
++        }
++    }
++
++    public static BooleanSupplier defaultBool(@BoolRes int res) {
++        return () -> getResources().getBoolean(res);
++    }
++
++    public static IntSupplier defaultInt(@IntegerRes int res) {
++        return () -> getResources().getInteger(res);
++    }
++
++    public static Supplier<String> defaultString(@StringRes int res) {
++        return () -> getResources().getString(res);
++    }
++
++    public static Resources getResources() {
++        return AppGlobals.getInitialApplication().getResources();
++    }
++}
+diff --git a/core/java/android/ext/settings/IntSetting.java b/core/java/android/ext/settings/IntSetting.java
+new file mode 100644
+index 000000000000..8db6fbf16884
+--- /dev/null
++++ b/core/java/android/ext/settings/IntSetting.java
+@@ -0,0 +1,107 @@
++/*
++ * Copyright (C) 2022 GrapheneOS
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package android.ext.settings;
++
++import android.annotation.Nullable;
++import android.content.Context;
++
++import java.util.function.IntSupplier;
++
++/** @hide */
++public class IntSetting extends Setting<IntSetting> {
++    private int defaultValue;
++    private volatile IntSupplier defaultValueSupplier;
++
++    @Nullable private final int[] validValues;
++
++    private IntSetting(Scope scope, String key, @Nullable int[] validValues) {
++        super(scope, key);
++        this.validValues = validValues;
++    }
++
++    public IntSetting(Scope scope, String key, int defaultValue) {
++        this(scope, key, (int[]) null);
++        setDefaultValue(defaultValue);
++    }
++
++    public IntSetting(Scope scope, String key, int defaultValue, int... validValues) {
++        this(scope, key, validValues);
++        setDefaultValue(defaultValue);
++    }
++
++    public IntSetting(Scope scope, String key, IntSupplier defaultValue) {
++        this(scope, key, (int[]) null);
++        defaultValueSupplier = defaultValue;
++    }
++
++    public IntSetting(Scope scope, String key, IntSupplier defaultValue, int... validValues) {
++        this(scope, key, validValues);
++        defaultValueSupplier = defaultValue;
++    }
++
++    public boolean validateValue(int val) {
++        if (validValues == null) {
++            return true;
++        }
++        // don't do sort() + bsearch() of validValues array, it's expected to have a small number of entries
++        for (int validValue : validValues) {
++            if (val == validValue) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    public final int get(Context ctx) {
++        return get(ctx, ctx.getUserId());
++    }
++
++    // use only if this is a per-user setting and the context is not a per-user one
++    public final int get(Context ctx, int userId) {
++        String valueStr = getRaw(ctx, userId);
++
++        if (valueStr == null) {
++            return getDefaultValue();
++        }
++
++        int value;
++        try {
++            value = Integer.parseInt(valueStr);
++        } catch (NumberFormatException e) {
++            e.printStackTrace();
++            return getDefaultValue();
++        }
++
++        if (!validateValue(value)) {
++            return getDefaultValue();
++        }
++
++        return value;
++    }
++
++    public final boolean put(Context ctx, int val) {
++        if (!validateValue(val)) {
++            throw new IllegalArgumentException(Integer.toString(val));
++        }
++        return putRaw(ctx, Integer.toString(val));
++    }
++
++    private void setDefaultValue(int val) {
++        if (!validateValue(val)) {
++            throw new IllegalStateException("invalid default value " + val);
++        }
++        defaultValue = val;
++    }
++
++    private int getDefaultValue() {
++        IntSupplier supplier = defaultValueSupplier;
++        if (supplier != null) {
++            setDefaultValue(supplier.getAsInt());
++            defaultValueSupplier = null;
++        }
++        return defaultValue;
++    }
++}
+diff --git a/core/java/android/ext/settings/IntSysProperty.java b/core/java/android/ext/settings/IntSysProperty.java
+new file mode 100644
+index 000000000000..dcb7f4a6f960
+--- /dev/null
++++ b/core/java/android/ext/settings/IntSysProperty.java
+@@ -0,0 +1,33 @@
++package android.ext.settings;
++
++import android.os.UserHandle;
++
++import java.util.function.IntSupplier;
++
++/** @hide */
++public class IntSysProperty extends IntSetting {
++
++    public IntSysProperty(String key, int defaultValue) {
++        super(Scope.SYSTEM_PROPERTY, key, defaultValue);
++    }
++
++    public IntSysProperty(String key, int defaultValue, int... validValues) {
++        super(Scope.SYSTEM_PROPERTY, key, defaultValue, validValues);
++    }
++
++    public IntSysProperty(String key, IntSupplier defaultValue) {
++        super(Scope.SYSTEM_PROPERTY, key, defaultValue);
++    }
++
++    public IntSysProperty(String key, IntSupplier defaultValue, int... validValues) {
++        super(Scope.SYSTEM_PROPERTY, key, defaultValue, validValues);
++    }
++
++    public int get() {
++        return super.get(null, UserHandle.USER_SYSTEM);
++    }
++
++    public boolean put(int val) {
++        return super.put(null, val);
++    }
++}
+diff --git a/core/java/android/ext/settings/Setting.java b/core/java/android/ext/settings/Setting.java
+new file mode 100644
+index 000000000000..7c9e7b2a6d21
+--- /dev/null
++++ b/core/java/android/ext/settings/Setting.java
+@@ -0,0 +1,166 @@
++/*
++ * Copyright (C) 2022 GrapheneOS
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package android.ext.settings;
++
++import android.annotation.Nullable;
++import android.content.Context;
++import android.database.ContentObserver;
++import android.net.Uri;
++import android.os.Handler;
++import android.os.SystemProperties;
++import android.provider.Settings;
++
++import java.util.function.Consumer;
++
++/** @hide */
++public abstract class Setting<SelfType extends Setting> {
++
++    public enum Scope {
++        SYSTEM_PROPERTY, // android.os.SystemProperties, doesn't support state observers
++        GLOBAL, // android.provider.Settings.Global
++        PER_USER, // android.provider.Settings.Secure
++    }
++
++    private final Scope scope;
++    private final String key;
++
++    protected Setting(Scope scope, String key) {
++        this.scope = scope;
++        this.key = key;
++    }
++
++    public final String getKey() {
++        return key;
++    }
++
++    public final Scope getScope() {
++        return scope;
++    }
++
++    @Nullable
++    protected final String getRaw(Context ctx, int userId) {
++        try {
++            switch (scope) {
++                case SYSTEM_PROPERTY: {
++                    String s = SystemProperties.get(key);
++                    if (s.isEmpty()) {
++                        return null;
++                    }
++                    return s;
++                }
++                case GLOBAL:
++                    return Settings.Global.getString(ctx.getContentResolver(), key);
++                case PER_USER:
++                    return Settings.Secure.getStringForUser(ctx.getContentResolver(), key, userId);
++            }
++        } catch (Throwable e) {
++            e.printStackTrace();
++            if (Settings.isInSystemServer()) {
++                // should never happen under normal circumstances, but if it does,
++                // don't crash the system_server
++                return null;
++            }
++
++            throw e;
++        }
++
++        // "switch (scope)" above should be exhaustive
++        throw new IllegalStateException();
++    }
++
++    protected final boolean putRaw(Context ctx, String val) {
++        switch (scope) {
++            case SYSTEM_PROPERTY: {
++                try {
++                    SystemProperties.set(key, val);
++                    return true;
++                } catch (RuntimeException e) {
++                    e.printStackTrace();
++                    if (e instanceof IllegalArgumentException) {
++                        // see doc
++                        throw e;
++                    }
++                    return false;
++                }
++            }
++            case GLOBAL:
++                return Settings.Global.putString(ctx.getContentResolver(), key, val);
++            case PER_USER:
++                return Settings.Secure.putString(ctx.getContentResolver(), key, val);
++            default:
++                throw new IllegalStateException();
++        }
++    }
++
++    public final boolean canObserveState() {
++        return scope != Scope.SYSTEM_PROPERTY;
++    }
++
++    // pass the return value to unregisterObserver() to remove the observer
++    public final Object registerObserver(Context ctx, Consumer<SelfType> callback, Handler handler) {
++        return registerObserver(ctx, ctx.getUserId(), callback, handler);
++    }
++
++    public final Object registerObserver(Context ctx, int userId, Consumer<SelfType> callback, Handler handler) {
++        if (scope == Scope.SYSTEM_PROPERTY) {
++            // SystemProperties.addChangeCallback() doesn't work unless the change is actually
++            // reported elsewhere in the same process with SystemProperties.callChangeCallbacks()
++            // or with its native equivalent (report_sysprop_change()).
++            // Leave the code in place in case this changes in the future.
++            if (false) {
++                Runnable observer = new Runnable() {
++                    private volatile String prev = SystemProperties.get(getKey());
++
++                    @Override
++                    public void run() {
++                        String value = SystemProperties.get(getKey());
++                        // change callback is dispatched whenever any change to system props occurs
++                        if (!prev.equals(value)) {
++                            prev = value;
++                            handler.post(() -> callback.accept((SelfType) Setting.this));
++                        }
++                    }
++                };
++                SystemProperties.addChangeCallback(observer);
++                return observer;
++            }
++            throw new UnsupportedOperationException("observing sysprop state is not supported");
++        }
++
++        Uri uri;
++        switch (scope) {
++            case GLOBAL:
++                uri = Settings.Global.getUriFor(key);
++                break;
++            case PER_USER:
++                uri = Settings.Secure.getUriFor(key);
++                break;
++            default:
++                throw new IllegalStateException();
++        }
++
++        ContentObserver observer = new ContentObserver(handler) {
++            @Override
++            public void onChange(boolean selfChange) {
++                callback.accept((SelfType) Setting.this);
++            }
++        };
++        ctx.getContentResolver().registerContentObserver(uri, false, observer, userId);
++
++        return observer;
++    }
++
++    public final void unregisterObserver(Context ctx, Object observer) {
++        if (scope == Scope.SYSTEM_PROPERTY) {
++            if (false) { // see comment in registerObserverInner
++                SystemProperties.removeChangeCallback((Runnable) observer);
++            }
++            throw new UnsupportedOperationException("observing sysprop state is not supported");
++        } else {
++            ctx.getContentResolver().unregisterContentObserver((ContentObserver) observer);
++        }
++    }
++}
+diff --git a/core/java/android/ext/settings/StringSetting.java b/core/java/android/ext/settings/StringSetting.java
+new file mode 100644
+index 000000000000..5f875dfcd0fd
+--- /dev/null
++++ b/core/java/android/ext/settings/StringSetting.java
+@@ -0,0 +1,66 @@
++/*
++ * Copyright (C) 2022 GrapheneOS
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package android.ext.settings;
++
++import android.content.Context;
++
++import java.util.function.Supplier;
++
++/** @hide */
++public class StringSetting extends Setting<StringSetting> {
++    private String defaultValue;
++    private volatile Supplier<String> defaultValueSupplier;
++
++    public StringSetting(Scope scope, String key, String defaultValue) {
++        super(scope, key);
++        setDefaultValue(defaultValue);
++    }
++
++    public StringSetting(Scope scope, String key, Supplier<String> defaultValue) {
++        super(scope, key);
++        this.defaultValueSupplier = defaultValue;
++    }
++
++    public boolean validateValue(String val) {
++        return true;
++    }
++
++    public final String get(Context ctx) {
++        return get(ctx, ctx.getUserId());
++    }
++
++    // use only if this is a per-user setting and the context is not a per-user one
++    public final String get(Context ctx, int userId) {
++        String s = getRaw(ctx, userId);
++        if (s == null || !validateValue(s)) {
++            return getDefaultValue();
++        }
++        return s;
++    }
++
++    public final boolean put(Context ctx, String val) {
++        if (!validateValue(val)) {
++            throw new IllegalStateException("invalid value " + val);
++        }
++        return putRaw(ctx, val);
++    }
++
++    private void setDefaultValue(String val) {
++        if (!validateValue(val)) {
++            throw new IllegalStateException("invalid default value " + val);
++        }
++        defaultValue = val;
++    }
++
++    private String getDefaultValue() {
++        Supplier<String> supplier = defaultValueSupplier;
++        if (supplier != null) {
++            setDefaultValue(supplier.get());
++            defaultValueSupplier = null;
++        }
++        return defaultValue;
++    }
++}
+diff --git a/core/java/android/ext/settings/StringSysProperty.java b/core/java/android/ext/settings/StringSysProperty.java
+new file mode 100644
+index 000000000000..ab4570100128
+--- /dev/null
++++ b/core/java/android/ext/settings/StringSysProperty.java
+@@ -0,0 +1,25 @@
++package android.ext.settings;
++
++import android.os.UserHandle;
++
++import java.util.function.Supplier;
++
++/** @hide */
++public class StringSysProperty extends StringSetting {
++
++    public StringSysProperty(String key, String defaultValue) {
++        super(Scope.SYSTEM_PROPERTY, key, defaultValue);
++    }
++
++    public StringSysProperty(String key, Supplier<String> defaultValue) {
++        super(Scope.SYSTEM_PROPERTY, key, defaultValue);
++    }
++
++    public String get() {
++        return super.get(null, UserHandle.USER_SYSTEM);
++    }
++
++    public boolean put(String val) {
++        return super.put(null, val);
++    }
++}
+diff --git a/core/java/android/provider/Settings.java b/core/java/android/provider/Settings.java
+index d9f9c91f059f..64d48d990f4f 100644
+--- a/core/java/android/provider/Settings.java
++++ b/core/java/android/provider/Settings.java
+@@ -57,6 +57,8 @@ import android.content.res.Resources;
+ import android.database.ContentObserver;
+ import android.database.Cursor;
+ import android.database.SQLException;
++import android.ext.settings.ExtSettings;
++import android.ext.settings.Setting;
+ import android.location.ILocationManager;
+ import android.location.LocationManager;
+ import android.media.AudioManager;
+@@ -3803,6 +3805,17 @@ public final class Settings {
+                     }
+                 }
+             }
++
++            Setting.Scope extSettingsScope = null;
++            if (callerClass == Global.class) {
++                extSettingsScope = Setting.Scope.GLOBAL;
++            } else if (callerClass == Secure.class) {
++                extSettingsScope = Setting.Scope.PER_USER;
++            }
++
++            if (extSettingsScope != null) {
++                ExtSettings.getKeys(extSettingsScope, allKeys);
++            }
+         } catch (IllegalAccessException ignored) {
+         }
+     }
+diff --git a/core/res/res/values/config_ext.xml b/core/res/res/values/config_ext.xml
+new file mode 100644
+index 000000000000..045e125f3d8d
+--- /dev/null
++++ b/core/res/res/values/config_ext.xml
+@@ -0,0 +1,3 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++</resources>
+-- 
+2.34.1
+

@@ -1,0 +1,213 @@
+From 0d171ccd7599343d3b43b07a474fef0acb671d94 Mon Sep 17 00:00:00 2001
+From: GrapheneOS <contact@grapheneos.org>
+Date: Thu, 29 Jul 2021 03:13:00 +0300
+Subject: [PATCH] gmscompat: support for Dynamite modules
+
+Authored by Danny Lin <danny@kdrag0n.dev> and Dmitry Muhomor
+<muhomor.dmitry@gmail.com> for inclusion in GrapheneOS.
+
+Commit history:
+
+Before June 2022:
+https://github.com/GrapheneOS/platform_libcore/commits/SP2A.220505.002.2022053100
+
+Before Android 12:
+https://github.com/GrapheneOS/platform_libcore/commits/RQ3A.211001.001.2021100606
+---
+ api/module-lib-current.txt                    |  6 +++
+ .../system/DelegateLastClassLoader.java       | 22 ++++++++++-
+ .../main/java/dalvik/system/DexPathList.java  |  2 +-
+ ojluni/src/main/java/java/io/File.java        | 38 ++++++++++++++++++-
+ ojluni/src/main/native/ZipFile.c              |  7 +++-
+ 5 files changed, 70 insertions(+), 5 deletions(-)
+
+diff --git a/api/module-lib-current.txt b/api/module-lib-current.txt
+index 0ff15eaf273..421d33cdf70 100644
+--- a/api/module-lib-current.txt
++++ b/api/module-lib-current.txt
+@@ -221,6 +221,7 @@ package dalvik.system {
+   public final class DelegateLastClassLoader extends dalvik.system.PathClassLoader {
+     ctor public DelegateLastClassLoader(String, String, ClassLoader, ClassLoader[]);
+     ctor public DelegateLastClassLoader(String, String, ClassLoader, ClassLoader[], ClassLoader[]);
++    field public static java.util.function.BiFunction<java.lang.String,java.lang.Boolean,java.lang.String> modifyClassLoaderPathHook;
+   }
+ 
+   public final class DexFile {
+@@ -379,6 +380,11 @@ package dalvik.system {
+ 
+ package java.io {
+ 
++  public class File implements java.lang.Comparable<java.io.File> java.io.Serializable {
++    field public static java.util.function.ToLongFunction<java.io.File> lastModifiedHook;
++    field public static java.util.function.Consumer<java.io.File> mkdirsFailedHook;
++  }
++
+   public final class FileDescriptor {
+     method public int getInt$();
+     method public void setInt$(int);
+diff --git a/dalvik/src/main/java/dalvik/system/DelegateLastClassLoader.java b/dalvik/src/main/java/dalvik/system/DelegateLastClassLoader.java
+index 2561af71e20..aba982074a0 100644
+--- a/dalvik/src/main/java/dalvik/system/DelegateLastClassLoader.java
++++ b/dalvik/src/main/java/dalvik/system/DelegateLastClassLoader.java
+@@ -25,6 +25,7 @@ import sun.misc.CompoundEnumeration;
+ import java.io.IOException;
+ import java.net.URL;
+ import java.util.Enumeration;
++import java.util.function.BiFunction;
+ 
+ import libcore.util.NonNull;
+ import libcore.util.Nullable;
+@@ -43,6 +44,13 @@ import libcore.util.Nullable;
+  */
+ public final class DelegateLastClassLoader extends PathClassLoader {
+ 
++    /**
++     * Pre-constructor librarySearchPath hook for GmsCompat
++     * @hide
++     */
++    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
++    public static BiFunction<String, Boolean, String> modifyClassLoaderPathHook;
++
+     /**
+      * Whether resource loading delegates to the parent class loader. True by default.
+      */
+@@ -103,7 +111,10 @@ public final class DelegateLastClassLoader extends PathClassLoader {
+ 
+     public DelegateLastClassLoader(@NonNull String dexPath, @Nullable String librarySearchPath,
+             @Nullable ClassLoader parent, boolean delegateResourceLoading) {
+-        super(dexPath, librarySearchPath, parent);
++        super(
++            maybeModifyClassLoaderPath(dexPath, Boolean.FALSE),
++            maybeModifyClassLoaderPath(librarySearchPath, Boolean.TRUE),
++            parent);
+         this.delegateResourceLoading = delegateResourceLoading;
+     }
+ 
+@@ -177,6 +188,15 @@ public final class DelegateLastClassLoader extends PathClassLoader {
+         this.delegateResourceLoading = true;
+     }
+ 
++    private static String maybeModifyClassLoaderPath(String path, Boolean nativeLibsPath) {
++        BiFunction<String, Boolean, String> hook = modifyClassLoaderPathHook;
++        return hook == null ?
++                path :
++                // replace file paths of GMS Dynamite modules with "/gmscompat_fd_%d" file descriptor
++                // references
++                hook.apply(path, nativeLibsPath);
++    }
++
+     @Override
+     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+         // First, check whether the class has already been loaded. Return it if that's the
+diff --git a/dalvik/src/main/java/dalvik/system/DexPathList.java b/dalvik/src/main/java/dalvik/system/DexPathList.java
+index 780f6b004b3..3b98bc4ec5f 100644
+--- a/dalvik/src/main/java/dalvik/system/DexPathList.java
++++ b/dalvik/src/main/java/dalvik/system/DexPathList.java
+@@ -377,7 +377,7 @@ public final class DexPathList {
+               // We support directories for looking up resources. Looking up resources in
+               // directories is useful for running libcore tests.
+               elements[elementsPos++] = new Element(file);
+-          } else if (file.isFile()) {
++          } else if (file.isFile() || file.getPath().startsWith("/gmscompat_fd_")) {
+               String name = file.getName();
+ 
+               DexFile dex = null;
+diff --git a/ojluni/src/main/java/java/io/File.java b/ojluni/src/main/java/java/io/File.java
+index 00375341184..2c940f4f67f 100644
+--- a/ojluni/src/main/java/java/io/File.java
++++ b/ojluni/src/main/java/java/io/File.java
+@@ -26,6 +26,8 @@
+ 
+ package java.io;
+ 
++import android.annotation.SystemApi;
++
+ import java.net.URI;
+ import java.net.URL;
+ import java.net.MalformedURLException;
+@@ -35,6 +37,9 @@ import java.util.ArrayList;
+ import java.security.AccessController;
+ import java.nio.file.Path;
+ import java.nio.file.FileSystems;
++import java.util.function.Consumer;
++import java.util.function.ToLongFunction;
++
+ import sun.security.action.GetPropertyAction;
+ 
+ // Android-added: Info about UTF-8 usage in filenames.
+@@ -161,6 +166,20 @@ public class File
+      */
+     private static final FileSystem fs = DefaultFileSystem.getFileSystem();
+ 
++    /**
++     * File#lastModified() hook for GmsCompat
++     * @hide
++     */
++    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
++    public static ToLongFunction<File> lastModifiedHook;
++
++    /**
++     * File#mkdirs() hook for GmsCompat
++     * @hide
++     */
++    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
++    public static Consumer<File> mkdirsFailedHook;
++
+     /**
+      * This abstract pathname's normalized pathname string. A normalized
+      * pathname string uses the default name-separator character and does not
+@@ -934,7 +953,14 @@ public class File
+         if (isInvalid()) {
+             return 0L;
+         }
+-        return fs.getLastModifiedTime(this);
++        long res = fs.getLastModifiedTime(this);
++        if (res == 0L) {
++            ToLongFunction<File> hook = lastModifiedHook;
++            if (hook != null) {
++                res = hook.applyAsLong(this);
++            }
++        }
++        return res;
+     }
+ 
+     /**
+@@ -1358,8 +1384,16 @@ public class File
+         }
+ 
+         File parent = canonFile.getParentFile();
+-        return (parent != null && (parent.mkdirs() || parent.exists()) &&
++        boolean res = (parent != null && (parent.mkdirs() || parent.exists()) &&
+                 canonFile.mkdir());
++
++        if (!res) {
++            Consumer<File> hook = mkdirsFailedHook;
++            if (hook != null) {
++                hook.accept(this);
++            }
++        }
++        return res;
+     }
+ 
+     // Android-changed: Replaced generic platform info with Android specific one.
+diff --git a/ojluni/src/main/native/ZipFile.c b/ojluni/src/main/native/ZipFile.c
+index 314b6c7aa79..6e8cd74c7e3 100644
+--- a/ojluni/src/main/native/ZipFile.c
++++ b/ojluni/src/main/native/ZipFile.c
+@@ -113,7 +113,12 @@ ZipFile_open(JNIEnv *env, jobject thiz, jstring name,
+                 goto finally;
+             }
+ #else
+-            zfd = JVM_Open(path, flag, 0);
++            if (!strncmp("/gmscompat_fd_", path, strlen("/gmscompat_fd_")) &&
++                    sscanf(path, "/gmscompat_fd_%d", &zfd) == 1) {
++                zfd = dup(zfd);
++            } else {
++                zfd = JVM_Open(path, flag, 0);
++            }
+             if (zfd < 0) {
+                 throwFileNotFoundException(env, name);
+                 goto finally;
+-- 
+2.34.1
+

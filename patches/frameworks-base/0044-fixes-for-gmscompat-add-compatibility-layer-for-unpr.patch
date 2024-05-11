@@ -1,0 +1,43 @@
+From af851545be8c9750a114fbace66b40af3360dac0 Mon Sep 17 00:00:00 2001
+From: Builder <admin@ceruleanfire.com>
+Date: Wed, 8 May 2024 01:07:02 +0000
+Subject: [PATCH 44/45] fixes for gmscompat: add compatibility layer for
+ unprivileged GMS
+
+Change-Id: I49f38d0550fd88cac788193f55869ef03eea57a6
+---
+ .../core/java/com/android/server/ext/PackageManagerHooks.java | 2 +-
+ .../java/com/android/server/pm/GosPackageStatePmHooks.java    | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/services/core/java/com/android/server/ext/PackageManagerHooks.java b/services/core/java/com/android/server/ext/PackageManagerHooks.java
+index 6c3a3267d17f..cb2fc1d6b9df 100644
+--- a/services/core/java/com/android/server/ext/PackageManagerHooks.java
++++ b/services/core/java/com/android/server/ext/PackageManagerHooks.java
+@@ -20,7 +20,7 @@ import com.android.server.pm.permission.Permission;
+ import com.android.server.pm.permission.SpecialRuntimePermUtils;
+ import com.android.server.pm.pkg.AndroidPackage;
+ import com.android.server.pm.pkg.PackageStateInternal;
+-import com.android.server.pm.pkg.parsing.ParsingPackage;
++import com.android.internal.pm.pkg.parsing.ParsingPackage;
+ 
+ public class PackageManagerHooks {
+ 
+diff --git a/services/core/java/com/android/server/pm/GosPackageStatePmHooks.java b/services/core/java/com/android/server/pm/GosPackageStatePmHooks.java
+index 38d6bb851005..afbd9bdf424b 100644
+--- a/services/core/java/com/android/server/pm/GosPackageStatePmHooks.java
++++ b/services/core/java/com/android/server/pm/GosPackageStatePmHooks.java
+@@ -713,8 +713,8 @@ public class GosPackageStatePmHooks {
+                         Slog.d(TAG, "granted permission " + intent.getExtras());
+                     }
+                 };
+-                pm.getContext().registerReceiver(receiver, new IntentFilter("GosPackageState.grant_permission"),
+-                        Context.RECEIVER_EXPORTED);
++                //pm.getContext().registerReceiver(receiver, new IntentFilter("GosPackageState.grant_permission"),
++                //        Context.RECEIVER_EXPORTED);
+             }
+         }
+ 
+-- 
+2.34.1
+

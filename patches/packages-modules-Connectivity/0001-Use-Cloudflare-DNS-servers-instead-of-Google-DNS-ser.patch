@@ -1,0 +1,66 @@
+From b09f85ae1400f0237511821f19961b67d79dc516 Mon Sep 17 00:00:00 2001
+From: flawedworld <flawedworld@flawed.world>
+Date: Sun, 17 Oct 2021 23:27:09 +0100
+Subject: [PATCH 1/2] Use Cloudflare DNS servers instead of Google DNS servers
+ for diagnostics, connectivity checking and tethering
+
+---
+ .../networkstack/tethering/TetheringConfiguration.java        | 2 +-
+ framework/src/android/net/util/DnsUtils.java                  | 4 ++--
+ .../com/android/server/connectivity/NetworkDiagnostics.java   | 4 ++--
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/Tethering/src/com/android/networkstack/tethering/TetheringConfiguration.java b/Tethering/src/com/android/networkstack/tethering/TetheringConfiguration.java
+index a2e7912cb0..1c367fb164 100644
+--- a/Tethering/src/com/android/networkstack/tethering/TetheringConfiguration.java
++++ b/Tethering/src/com/android/networkstack/tethering/TetheringConfiguration.java
+@@ -77,7 +77,7 @@ public class TetheringConfiguration {
+         "192.168.48.2", "192.168.48.254", "192.168.49.2", "192.168.49.254",
+     };
+ 
+-    private static final String[] DEFAULT_IPV4_DNS = {"8.8.4.4", "8.8.8.8"};
++    private static final String[] DEFAULT_IPV4_DNS = {"1.0.0.1", "1.1.1.1"};
+ 
+     @VisibleForTesting
+     public static final int TETHER_USB_RNDIS_FUNCTION = 0;
+diff --git a/framework/src/android/net/util/DnsUtils.java b/framework/src/android/net/util/DnsUtils.java
+index 3fe245edb9..d3e2f66105 100644
+--- a/framework/src/android/net/util/DnsUtils.java
++++ b/framework/src/android/net/util/DnsUtils.java
+@@ -342,7 +342,7 @@ public class DnsUtils {
+      */
+     public static boolean haveIpv4(@Nullable Network network) {
+         final SocketAddress addrIpv4 =
+-                new InetSocketAddress(InetAddresses.parseNumericAddress("8.8.8.8"), 0);
++                new InetSocketAddress(InetAddresses.parseNumericAddress("1.1.1.1"), 0);
+         return checkConnectivity(network, AF_INET, addrIpv4);
+     }
+ 
+@@ -352,7 +352,7 @@ public class DnsUtils {
+      */
+     public static boolean haveIpv6(@Nullable Network network) {
+         final SocketAddress addrIpv6 =
+-                new InetSocketAddress(InetAddresses.parseNumericAddress("2000::"), 0);
++                new InetSocketAddress(InetAddresses.parseNumericAddress("2606:4700:4700::1001"), 0);
+         return checkConnectivity(network, AF_INET6, addrIpv6);
+     }
+ 
+diff --git a/service/src/com/android/server/connectivity/NetworkDiagnostics.java b/service/src/com/android/server/connectivity/NetworkDiagnostics.java
+index 3db37e59e0..8f36ba0d94 100644
+--- a/service/src/com/android/server/connectivity/NetworkDiagnostics.java
++++ b/service/src/com/android/server/connectivity/NetworkDiagnostics.java
+@@ -109,9 +109,9 @@ import javax.net.ssl.SSLSocketFactory;
+ public class NetworkDiagnostics {
+     private static final String TAG = "NetworkDiagnostics";
+ 
+-    private static final InetAddress TEST_DNS4 = InetAddresses.parseNumericAddress("8.8.8.8");
++    private static final InetAddress TEST_DNS4 = InetAddresses.parseNumericAddress("1.1.1.1");
+     private static final InetAddress TEST_DNS6 = InetAddresses.parseNumericAddress(
+-            "2001:4860:4860::8888");
++            "2606:4700:4700::1001");
+ 
+     // For brevity elsewhere.
+     private static final long now() {
+-- 
+2.34.1
+

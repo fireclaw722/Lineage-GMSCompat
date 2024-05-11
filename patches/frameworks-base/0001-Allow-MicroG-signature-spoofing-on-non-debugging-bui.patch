@@ -1,0 +1,26 @@
+From f615e5d15e74a6ddec27fdc1712a510b1f744079 Mon Sep 17 00:00:00 2001
+From: Builder <admin@ceruleanfire.com>
+Date: Tue, 7 May 2024 23:55:58 +0000
+Subject: [PATCH 01/45] Allow MicroG signature-spoofing on non-debugging builds
+
+Change-Id: I0a39996f605eb3185b275e689290f9ee1e3a2546
+---
+ services/core/java/com/android/server/pm/ComputerEngine.java | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/pm/ComputerEngine.java b/services/core/java/com/android/server/pm/ComputerEngine.java
+index d8cbe9d5e7c7..f86c78e45e78 100644
+--- a/services/core/java/com/android/server/pm/ComputerEngine.java
++++ b/services/core/java/com/android/server/pm/ComputerEngine.java
+@@ -1473,7 +1473,7 @@ public class ComputerEngine implements Computer {
+ 
+     public static boolean isMicrogSigned(AndroidPackage p) {
+         if (!isDebuggable()) {
+-            return false;
++            //return false;
+         }
+ 
+         // Allowlist the following apps:
+-- 
+2.34.1
+

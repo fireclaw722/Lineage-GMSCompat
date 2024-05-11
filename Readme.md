@@ -16,17 +16,20 @@ Everything provided here is for others to run builds the same as what is provide
     * See [this Reddit thread](https://www.reddit.com/r/LineageOS/comments/n7yo7u/a_discussion_about_bootloader_lockingunlocking/) for official stance on Bootloader Locking
 * Extra Apps
   * **disabled** Reserved space, for system G-Apps and addon install
+    * 20240511 - Only for Pixel 3a and Pixel 3a XL
   * QKSMS replacing stock messaging for SMS/MMS
   * K-9 Mail for an up-to-date email app
   * F-Droid Privileged Extension
-    * Needs to be on product partition if loaded via vendor/lineage/config/*.mk
-    * Or could be added to build/make (but we do things the Lineage-way here)
+  * GMSCompat & AppCompat
+    * AppCompat is required for GMSCompat app
+    * GMSCompat is required for Sandboxed Play Services
 * Max number of users raised from 4 to 16
 * Blue LineageOS bootanimation (these are unofficial builds after all)
 * From GrapheneOS:
   * Secondary User Logout (**broken**)
   * Stop Auto-granting location to system browsers (Currently Jelly)
   * Censored notifications from other users
+  * Use Cloudflare DNS over Google DNS in many basic checks
   * Sandboxed Play Services
     * Many things that are pre-requisite for gmscompat
     * See `gmscompat-patches.bash` for further info

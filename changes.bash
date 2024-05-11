@@ -1,3 +1,10 @@
+####
+#### This isn't an actual script, and it is to
+#### function as a how-to merge different changes
+#### Also contains some notes on merges
+####
+exit
+
 ##
 ## Android 14 / Lineage 21 (U)
 ##
